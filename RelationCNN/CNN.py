@@ -24,9 +24,9 @@ import gzip
 import keras
 from keras.preprocessing import sequence
 from keras.models import Sequential
-from keras.layers.core import Dense, Dropout, Activation, Flatten, Merge
+from keras.layers.core import Dense, Dropout, Activation, Flatten
 from keras.layers.embeddings import Embedding
-from keras.layers import Convolution1D, MaxPooling1D, GlobalMaxPooling1D
+from keras.layers import Convolution1D, MaxPooling1D, GlobalMaxPooling1D, Merge
 
 from keras.utils import np_utils
 
