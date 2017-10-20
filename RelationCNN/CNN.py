@@ -19,6 +19,7 @@ Code was tested with:
 import numpy as np
 np.random.seed(1337)  # for reproducibility
 
+import sys
 import cPickle as pkl
 import gzip
 import keras
@@ -26,9 +27,9 @@ from keras.preprocessing import sequence
 from keras.models import Sequential
 from keras.layers.core import Dense, Dropout, Activation, Flatten
 from keras.layers.embeddings import Embedding
-from keras.layers import Convolution1D, MaxPooling1D, GlobalMaxPooling1D, Merge
-
+from keras.layers import Convolution1D, MaxPooling1D, GlobalMaxPooling1D, Merge, GlobalAveragePooling1D
 from keras.utils import np_utils
+from flipGradientTF import GradientReversal
 
 
 
@@ -40,7 +41,7 @@ nb_epoch = 100
 position_dims = 50
 
 print "Load dataset"
-f = gzip.open('pkl/sem-relations.pkl.gz', 'rb')
+f = gzip.open('pkl_tmp/sem-relations.pkl.gz', 'rb')
 yTrain, sentenceTrain, positionTrain1, positionTrain2 = pkl.load(f)
 yTest, sentenceTest, positionTest1, positionTest2  = pkl.load(f)
 f.close()
@@ -63,11 +64,19 @@ print "positionTest1: ", positionTest1.shape
 print "yTest: ", yTest.shape
 
 
-f = gzip.open('pkl/embeddings.pkl.gz', 'rb')
-embeddings = pkl.load(f)
+f = gzip.open('pkl_tmp/embeddings1.pkl.gz', 'rb')
+embeddings1 = pkl.load(f)
 f.close()
 
-print "Embeddings: ",embeddings.shape
+f = gzip.open('pkl_tmp/embeddings2.pkl.gz', 'rb')
+embeddings2 = pkl.load(f)
+f.close()
+
+print "Embeddings 1: ",embeddings1.shape
+print "Embeddings 2: ",embeddings2.shape
+
+
+## Position embeddings
 
 distanceModel1 = Sequential()
 distanceModel1.add(Embedding(max_position, position_dims, input_length=positionTrain1.shape[1]))
@@ -75,28 +84,61 @@ distanceModel1.add(Embedding(max_position, position_dims, input_length=positionT
 distanceModel2 = Sequential()
 distanceModel2.add(Embedding(max_position, position_dims, input_length=positionTrain2.shape[1]))
 
-wordModel = Sequential()
-wordModel.add(Embedding(embeddings.shape[0], embeddings.shape[1], input_length=sentenceTrain.shape[1], weights=[embeddings], trainable=False))
+
+## Word embeddings
+
+wordModel_dom1 = Sequential()
+wordModel_dom1.add(Embedding(embeddings1.shape[0], embeddings1.shape[1], input_length=sentenceTrain.shape[1], weights=[embeddings1], trainable=False))
+
+wordModel_dom2 = Sequential()
+wordModel_dom2.add(Embedding(embeddings2.shape[0], embeddings2.shape[1], input_length=sentenceTrain.shape[1], weights=[embeddings2], trainable=False))
 
 
-model = Sequential()
-model.add(Merge([wordModel, distanceModel1, distanceModel2], mode='concat'))
+## Domain-agnostic embedding mapper
+
+wordModel_joint = Sequential()
+wordModel_joint.add(Merge([wordModel_dom1, wordModel_dom2], mode='concat'))
+wordModel_joint.add(Dense(embeddings2.shape[1], activation='tanh'))
 
 
-model.add(Convolution1D(nb_filter=nb_filter,
+## Domain adversarial classifier
+
+domain_classifier = Sequential()
+domain_classifier.add(wordModel_joint)
+domain_classifier.add(GlobalAveragePooling1D())
+domain_classifier.add(GradientReversal(1))
+domain_classifier.add(Dense(1))
+domain_classifier.add(Activation('sigmoid'))
+
+
+## Convolutional model pipeline
+
+conv_model = Sequential()
+conv_model.add(Merge([wordModel_joint, distanceModel1, distanceModel2], mode='concat'))
+
+
+conv_model.add(Convolution1D(nb_filter=nb_filter,
                         filter_length=filter_length,
                         border_mode='same',
                         activation='tanh',
                         subsample_length=1))
 # we use standard max over time pooling
-model.add(GlobalMaxPooling1D())
+conv_model.add(GlobalMaxPooling1D())
 
-model.add(Dropout(0.25))
-model.add(Dense(n_out, activation='softmax'))
+conv_model.add(Dropout(0.25))
+conv_model.add(Dense(n_out, activation='softmax'))
 
 
-model.compile(loss='categorical_crossentropy',optimizer='Adam', metrics=['accuracy'])
-model.summary()
+## Joint loss
+
+multi_objective_model = Sequential()
+multi_objective_model.add(Merge([domain_classifier, conv_model], mode='concat'))
+
+
+multi_objective_model.compile(loss='categorical_crossentropy', optimizer='Adam', metrics=['accuracy'])
+multi_objective_model.summary()
+
+
 print "Start training"
 
 
@@ -120,9 +162,64 @@ def getPrecision(pred_test, yTest, targetLabel):
     
     return float(correctTargetLabelCount) / targetLabelCount
 
+# after each epoch, check error on dev set
 for epoch in xrange(nb_epoch):       
-    model.fit([sentenceTrain, positionTrain1, positionTrain2], train_y_cat, batch_size=batch_size, verbose=True,nb_epoch=1)   
-    pred_test = model.predict_classes([sentenceTest, positionTest1, positionTest2], verbose=False)
+    
+    sys.stdout.write('[TRAINING] Starting iteration %d...\n' % (epoch+1))
+    
+    # shuffle training data at start of each epoch
+    data_indices = list(range(sentenceTrain.shape[0]))
+    np.random.shuffle(data_indices)
+
+    cur_batch_ix, nbatches = 0, 0
+    total_batches = np.ceil(sentenceTrain.shape[0]/float(batch_size))
+    while cur_batch_ix < sentenceTrain.shape[0]:
+        # get the next batch
+        next_batch_indices = data_indices[cur_batch_ix:cur_batch_ix+batch_size]
+        batch_sentences = sentenceTrain[next_batch_indices]
+        batch_labels = train_y_cat[next_batch_indices]
+        batch_positions1 = positionTrain1[next_batch_indices]
+        batch_positions2 = positionTrain2[next_batch_indices]
+
+        # choose domain
+        domain = np.random.choice(
+            [1,2],
+            p=[0.5, 0.5]
+        )
+        if domain == 1:
+            batch_sentences_1 = batch_sentences
+            batch_sentences_2 = np.zeros(batch_sentences.shape)  # "PADDING"
+            domain_labels = [[0] for _ in range(batch_size)]
+            batch_labels = np.concatenate([batch_labels, domain_labels], axis=1)
+        else:
+            batch_sentences_1 = np.zeros(batch_sentences.shape)  # "PADDING"
+            batch_sentences_2 = batch_sentences
+            domain_labels = [[1] for _ in range(batch_size)]
+            batch_labels = np.concatenate([batch_labels, domain_labels], axis=1)
+
+        # train on it
+        multi_objective_model.train_on_batch(
+            [
+                batch_sentences_1,
+                batch_sentences_2,
+                batch_positions1,
+                batch_positions2
+            ],
+            batch_labels
+        )
+
+        cur_batch_ix += batch_size
+        nbatches += 1
+
+        sys.stdout.write('  >> Processed %d/%d batches\r' % (nbatches, total_batches))
+        sys.stdout.flush()
+
+    # ran all batches!
+    sys.stdout.write('\n\n[TRAINING] Completed iteration %d.  Calculating dev set error:' % (epoch+1))
+    
+    #multi_objective_model.fit([sentenceTrain, sentenceTrain, positionTrain1, positionTrain2], train_y_cat, batch_size=batch_size, verbose=True, nb_epoch=1)
+
+    pred_test = multi_objective_model.predict_classes([sentenceTest, sentenceTest, positionTest1, positionTest2], verbose=False)
     
     dctLabels = np.sum(pred_test)
     totalDCTLabels = np.sum(yTest)

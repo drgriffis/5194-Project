@@ -10,12 +10,16 @@ import cPickle as pkl
 from nltk import FreqDist
 import gzip
 
-outputFilePath = 'pkl/sem-relations.pkl.gz'
-embeddingsPklPath = 'pkl/embeddings.pkl.gz'
+outputFilePath = 'pkl_tmp/sem-relations.pkl.gz'
+embeddings1PklPath = 'pkl_tmp/embeddings1.pkl.gz'
+embeddings2PklPath = 'pkl_tmp/embeddings2.pkl.gz'
 
 #Download from https://levyomer.wordpress.com/2014/04/25/dependency-based-word-embeddings/ the deps.words.bz file
 #and unzip it. Change the path here to the correct path for the embeddings file
-embeddingsPath = '/home/likewise-open/UKP/reimers/NLP/Models/Word Embeddings/English/levy_dependency_based.deps.words'
+#embeddingsPath = '/home/likewise-open/UKP/reimers/NLP/Models/Word Embeddings/English/levy_dependency_based.deps.words'
+#embeddingsPath = '/fs/project/PAS1315/projgroup7/deeplearning4nlp-tutorial/2016-11_Seminar/Session 3 - Relation CNN/code/deps.words'
+embeddings1Path = '/users/PAS1315/osu9099/5194-Project/embeddings/gigaword.sgns.txt'
+embeddings2Path = '/users/PAS1315/osu9099/5194-Project/embeddings/wikipedia.sgns.txt'
 
 
 folder = 'files/'
@@ -135,37 +139,95 @@ print "Max Sentence Lengths: ",maxSentenceLen
 # :: Read in word embeddings ::
 
 
-word2Idx = {}
-embeddings = []
+"""
+For obtaining word embedding features from the two domains, we do the following:
+    (1) take the union of the vocabularies from domain 1 and domain 2
+    (2) take the intersection of this with the words in the dataset
+    (3) order the resulting filtered vocabulary
+    (4) build the embedding matrix for each domain as follows:
+        a. iterate over the words in the ordered vocabulary
+        b. if the word is embedded in that domain, add its embedding
+        c. otherwise, use that domain's UNKNOWN embedding
+"""
 
+def getVocabularyUnion(embeddingsPath1, embeddingsPath2, words=set()):
+    vocab = set()
+    for embeddingsPath in [embeddingsPath1, embeddingsPath2]:
+        vocab = vocab.union(readEmbeddingVocabulary(embeddingsPath, words))
+    return vocab
 
+def readEmbeddingVocabulary(embeddingsPath, words):
+    vocab = set()
+    for line in open(embeddingsPath):
+        split = line.strip().split(" ")
+        word = split[0].lower()
 
-for line in open(embeddingsPath):
-    split = line.strip().split(" ")
-    word = split[0]
-    
-    if len(word2Idx) == 0: #Add padding+unknown
-        word2Idx["PADDING"] = len(word2Idx)
-        vector = np.zeros(len(split)-1) #Zero vector vor 'PADDING' word
-        embeddings.append(vector)
-        
-        word2Idx["UNKNOWN"] = len(word2Idx)
-        vector = np.random.uniform(-0.25, 0.25, len(split)-1)
-        embeddings.append(vector)
+        if word in words:
+            vocab.add(word)
+    return vocab
 
-    if split[0].lower() in words:
-        vector = np.array([float(num) for num in split[1:]])
-        embeddings.append(vector)
-        word2Idx[split[0]] = len(word2Idx)
-        
-embeddings = np.array(embeddings)
+def getOrderedVocabulary(embeddingPath1, embeddingPath2, words):
+    union = getVocabularyUnion(embeddingPath1, embeddingPath2, words)
+    ordered = tuple(union)
 
-print "Embeddings shape: ", embeddings.shape
+    # base cases for word2Idx
+    word2Idx = {
+        "PADDING": 0,
+        "UNKNOWN": 1
+    }
+
+    for word in ordered:
+        word2Idx[word] = len(word2Idx)
+
+    return word2Idx
+
+def loadFilteredEmbeddings(embeddingsPath, word2Idx):
+    # check how many dimensions are in the embedding file
+    with open(embeddingsPath) as f:
+        first_line = f.readline()
+        split = [s.strip() for s in first_line.split(" ")]
+        ndim = len(split) - 1  # account for the word itself
+
+    embeddings = np.zeros([len(word2Idx), ndim])
+    # add PADDING (this is unnecessary, since already zeros, but makes me feel better)
+    embeddings[word2Idx["PADDING"]] = np.zeros(ndim)
+    # add UNKNOWN
+    embeddings[word2Idx["UNKNOWN"]] = np.random.uniform(-0.25, 0.25, ndim)
+
+    # read in the embeddings specified in the file
+    words_seen = set()
+    for line in open(embeddingsPath):
+        split = line.strip().split(" ")
+        word = split[0].lower()
+        assert len(split) == ndim+1
+
+        if word in word2Idx:
+            vector = np.array([float(num) for num in split[1:]])
+            embeddings[word2Idx[word]] = vector
+            words_seen.add(word)
+
+    # copy UNKNOWN embedding for all unseen words
+    for word in word2Idx:
+        if not word in words_seen:
+            embeddings[word2Idx[word]] = embeddings[word2Idx["UNKNOWN"]]
+            
+    return embeddings
+
+word2Idx = getOrderedVocabulary(embeddings1Path, embeddings2Path, words)
+embeddings1 = loadFilteredEmbeddings(embeddings1Path, word2Idx)
+embeddings2 = loadFilteredEmbeddings(embeddings2Path, word2Idx)
+
+print "Embeddings (1) shape: ", embeddings1.shape
+print "Embeddings (2) shape: ", embeddings2.shape
 print "Len words: ", len(words)
 
-f = gzip.open(embeddingsPklPath, 'wb')
-pkl.dump(embeddings, f, -1)
-f.close()
+for (embeddings, embeddingsPklPath) in [
+            (embeddings1, embeddings1PklPath),
+            (embeddings2, embeddings2PklPath)
+        ]:
+    f = gzip.open(embeddingsPklPath, 'wb')
+    pkl.dump(embeddings, f, -1)
+    f.close()
 
 # :: Create token matrix ::
 train_set = createMatrices(files[0], word2Idx, max(maxSentenceLen))
