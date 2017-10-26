@@ -24,11 +24,14 @@ import cPickle as pkl
 import gzip
 import keras
 from keras.preprocessing import sequence
-from keras.models import Sequential
+from keras.models import Sequential, Model
 from keras.layers.core import Dense, Dropout, Activation, Flatten
 from keras.layers.embeddings import Embedding
-from keras.layers import Convolution1D, MaxPooling1D, GlobalMaxPooling1D, Merge, GlobalAveragePooling1D
+from keras.layers import Input, Convolution1D, MaxPooling1D, GlobalMaxPooling1D, Merge, GlobalAveragePooling1D
+from keras.layers.merge import Concatenate, Add
 from keras.utils import np_utils
+from keras.losses import categorical_crossentropy, binary_crossentropy
+from keras import backend as K
 from flipGradientTF import GradientReversal
 
 
@@ -39,6 +42,7 @@ filter_length = 3
 hidden_dims = 100
 nb_epoch = 100
 position_dims = 50
+base_lambda = 0.4
 
 print "Load dataset"
 f = gzip.open('pkl_tmp/sem-relations.pkl.gz', 'rb')
@@ -68,7 +72,8 @@ f = gzip.open('pkl_tmp/embeddings1.pkl.gz', 'rb')
 embeddings1 = pkl.load(f)
 f.close()
 
-f = gzip.open('pkl_tmp/embeddings2.pkl.gz', 'rb')
+#f = gzip.open('pkl_tmp/embeddings2.pkl.gz', 'rb')
+f = gzip.open('pkl_tmp/embeddings1.pkl.gz', 'rb')
 embeddings2 = pkl.load(f)
 f.close()
 
@@ -78,65 +83,83 @@ print "Embeddings 2: ",embeddings2.shape
 
 ## Position embeddings
 
-distanceModel1 = Sequential()
-distanceModel1.add(Embedding(max_position, position_dims, input_length=positionTrain1.shape[1]))
+input_positions_e1 = Input(shape=[positionTrain1.shape[1]], name='e1_positions')
+input_positions_e2 = Input(shape=[positionTrain2.shape[1]], name='e2_positions')
 
-distanceModel2 = Sequential()
-distanceModel2.add(Embedding(max_position, position_dims, input_length=positionTrain2.shape[1]))
+position_embeddings_e1 = Embedding(max_position, position_dims, input_length=positionTrain1.shape[1])
+position_embeddings_e2 = Embedding(max_position, position_dims, input_length=positionTrain2.shape[1])
+
+embedded_positions_e1 = position_embeddings_e1(input_positions_e1)
+embedded_positions_e2 = position_embeddings_e2(input_positions_e2)
 
 
 ## Word embeddings
 
-wordModel_dom1 = Sequential()
-wordModel_dom1.add(Embedding(embeddings1.shape[0], embeddings1.shape[1], input_length=sentenceTrain.shape[1], weights=[embeddings1], trainable=False))
+input_words_dom1 = Input(shape=[sentenceTrain.shape[1]], name='dom1_word_indices')
+input_words_dom2 = Input(shape=[sentenceTrain.shape[1]], name='dom2_word_indices')
 
-wordModel_dom2 = Sequential()
-wordModel_dom2.add(Embedding(embeddings2.shape[0], embeddings2.shape[1], input_length=sentenceTrain.shape[1], weights=[embeddings2], trainable=False))
+word_embeddings_dom1 = Embedding(embeddings1.shape[0], embeddings1.shape[1], weights=[embeddings1], trainable=False, input_length=sentenceTrain.shape[1])
+word_embeddings_dom2 = Embedding(embeddings2.shape[0], embeddings2.shape[1], weights=[embeddings2], trainable=False, input_length=sentenceTrain.shape[1])
+
+embedded_words_dom1 = word_embeddings_dom1(input_words_dom1)
+embedded_words_dom2 = word_embeddings_dom2(input_words_dom2)
 
 
 ## Domain-agnostic embedding mapper
 
-wordModel_joint = Sequential()
-wordModel_joint.add(Merge([wordModel_dom1, wordModel_dom2], mode='concat'))
-wordModel_joint.add(Dense(embeddings2.shape[1], activation='tanh'))
+inter_domain_input = Add()([embedded_words_dom1, embedded_words_dom2])
+domain_mapper = Dense(embeddings2.shape[1], activation='tanh')
+mapped_input = domain_mapper(inter_domain_input)
 
 
 ## Domain adversarial classifier
 
-domain_classifier = Sequential()
-domain_classifier.add(wordModel_joint)
-domain_classifier.add(GlobalAveragePooling1D())
-domain_classifier.add(GradientReversal(1))
-domain_classifier.add(Dense(1))
-domain_classifier.add(Activation('sigmoid'))
+domain_pooled_input = GlobalAveragePooling1D()(mapped_input)
+grad_rev = GradientReversal(1)(domain_pooled_input)
+domain_transformer = Dense(1)(grad_rev)
+domain_classifier = Activation('sigmoid')(domain_transformer)
 
 
 ## Convolutional model pipeline
 
-conv_model = Sequential()
-conv_model.add(Merge([wordModel_joint, distanceModel1, distanceModel2], mode='concat'))
+conv_input = Concatenate()([mapped_input, embedded_positions_e1, embedded_positions_e2])
 
 
-conv_model.add(Convolution1D(nb_filter=nb_filter,
+convolution = Convolution1D(nb_filter=nb_filter,
                         filter_length=filter_length,
                         border_mode='same',
                         activation='tanh',
-                        subsample_length=1))
+                        subsample_length=1)
+convolved = convolution(conv_input)
 # we use standard max over time pooling
-conv_model.add(GlobalMaxPooling1D())
+pooled = GlobalMaxPooling1D()(convolved)
 
-conv_model.add(Dropout(0.25))
-conv_model.add(Dense(n_out, activation='softmax'))
-
-
-## Joint loss
-
-multi_objective_model = Sequential()
-multi_objective_model.add(Merge([domain_classifier, conv_model], mode='concat'))
+dropout = Dropout(0.25)(pooled)
+conv_prediction = Dense(n_out, activation='softmax')(dropout)
 
 
-multi_objective_model.compile(loss='categorical_crossentropy', optimizer='Adam', metrics=['accuracy'])
-multi_objective_model.summary()
+## Per-task loss functions
+
+tradeoff_param = Input(shape=(1,), name='tradeoff_param')
+
+def main_task_loss(y_pred, y_true):
+    raw_loss = categorical_crossentropy(y_pred, y_true)
+    return (1-tradeoff_param)*raw_loss
+
+def domain_classifier_loss(y_pred, y_true):
+    raw_loss = binary_crossentropy(y_pred, y_true)
+    return tradeoff_param*raw_loss
+
+multi_objective_model = Model(
+    inputs=[input_words_dom1, input_words_dom2, input_positions_e1, input_positions_e2, tradeoff_param],
+    outputs=[conv_prediction, domain_classifier]
+)
+multi_objective_model.compile(
+    #loss=joint_loss,
+    loss=[main_task_loss, domain_classifier_loss],
+    optimizer='Adam',
+    metrics=['accuracy']
+)
 
 
 print "Start training"
@@ -186,16 +209,28 @@ for epoch in xrange(nb_epoch):
             [1,2],
             p=[0.5, 0.5]
         )
+        # source domain
         if domain == 1:
             batch_sentences_1 = batch_sentences
             batch_sentences_2 = np.zeros(batch_sentences.shape)  # "PADDING"
-            domain_labels = [[0] for _ in range(batch_size)]
-            batch_labels = np.concatenate([batch_labels, domain_labels], axis=1)
+            domain_labels = np.array([[0] for _ in range(batch_size)])
+            lmbda = base_lambda
+        # target domain
         else:
             batch_sentences_1 = np.zeros(batch_sentences.shape)  # "PADDING"
             batch_sentences_2 = batch_sentences
-            domain_labels = [[1] for _ in range(batch_size)]
-            batch_labels = np.concatenate([batch_labels, domain_labels], axis=1)
+            domain_labels = np.array([[1] for _ in range(batch_size)])
+            # choose if we will use the joint loss or domain loss only
+            loss_type = np.random.choice(
+                [1,2],
+                p=[1.0,0.0]
+            )
+            if loss_type == 1:
+                lmbda = base_lambda
+            else:
+                lmbda = 1
+
+        lmbda = np.array([[lmbda] for _ in range(batch_size)])
 
         # train on it
         multi_objective_model.train_on_batch(
@@ -203,9 +238,13 @@ for epoch in xrange(nb_epoch):
                 batch_sentences_1,
                 batch_sentences_2,
                 batch_positions1,
-                batch_positions2
+                batch_positions2,
+                lmbda
             ],
-            batch_labels
+            [
+                batch_labels,
+                domain_labels
+            ]
         )
 
         cur_batch_ix += batch_size
@@ -216,10 +255,17 @@ for epoch in xrange(nb_epoch):
 
     # ran all batches!
     sys.stdout.write('\n\n[TRAINING] Completed iteration %d.  Calculating dev set error:' % (epoch+1))
-    
-    #multi_objective_model.fit([sentenceTrain, sentenceTrain, positionTrain1, positionTrain2], train_y_cat, batch_size=batch_size, verbose=True, nb_epoch=1)
 
-    pred_test = multi_objective_model.predict_classes([sentenceTest, sentenceTest, positionTest1, positionTest2], verbose=False)
+    (soft_predictions, _) = multi_objective_model.predict(
+        [
+            sentenceTest, 
+            sentenceTest, 
+            positionTest1, 
+            positionTest2,
+            np.array([[0] for _ in range(sentenceTest.shape[0])])
+        ], verbose=False
+    )
+    pred_test = np.argmax(soft_predictions, axis=1)
     
     dctLabels = np.sum(pred_test)
     totalDCTLabels = np.sum(yTest)
