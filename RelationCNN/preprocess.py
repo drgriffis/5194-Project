@@ -10,20 +10,8 @@ import cPickle as pkl
 from nltk import FreqDist
 import gzip
 
-outputFilePath = 'pkl_tmp/sem-relations.pkl.gz'
-embeddings1PklPath = 'pkl_tmp/embeddings1.pkl.gz'
-embeddings2PklPath = 'pkl_tmp/embeddings2.pkl.gz'
 
-#Download from https://levyomer.wordpress.com/2014/04/25/dependency-based-word-embeddings/ the deps.words.bz file
-#and unzip it. Change the path here to the correct path for the embeddings file
-#embeddingsPath = '/home/likewise-open/UKP/reimers/NLP/Models/Word Embeddings/English/levy_dependency_based.deps.words'
-#embeddingsPath = '/fs/project/PAS1315/projgroup7/deeplearning4nlp-tutorial/2016-11_Seminar/Session 3 - Relation CNN/code/deps.words'
-embeddings1Path = '/users/PAS1315/osu9099/5194-Project/embeddings/gigaword.sgns.txt'
-embeddings2Path = '/users/PAS1315/osu9099/5194-Project/embeddings/wikipedia.sgns.txt'
-
-
-folder = 'files/'
-files = [folder+'train.txt', folder+'test.txt']
+## Globals
 
 #Mapping of the labels to integers
 labelsMapping = {'Other':0, 
@@ -37,22 +25,13 @@ labelsMapping = {'Other':0,
                  'Member-Collection(e1,e2)':15, 'Member-Collection(e2,e1)':16,
                  'Content-Container(e1,e2)':17, 'Content-Container(e2,e1)':18}
 
-
-
-
-words = {}
-maxSentenceLen = [0,0,0]
-labelsDistribution = FreqDist()
-
-distanceMapping = {'PADDING': 0, 'LowerMin': 1, 'GreaterMax': 2}
 minDistance = -30
 maxDistance = 30
-for dis in xrange(minDistance,maxDistance+1):
-    distanceMapping[dis] = len(distanceMapping)
 
 
 
-def createMatrices(file, word2Idx, maxSentenceLen=100):
+
+def createMatrices(file, word2Idx, labelsDistribution, distanceMapping, maxSentenceLen=100):
     """Creates matrices for the events and sentence for the given file"""
     labels = []
     positionMatrix1 = []
@@ -117,26 +96,6 @@ def getWordIdx(token, word2Idx):
     
     return word2Idx["UNKNOWN"]
 
-
-
-for fileIdx in xrange(len(files)):
-    file = files[fileIdx]
-    for line in open(file):
-        splits = line.strip().split('\t')
-        
-        label = splits[0]
-        
-        
-        sentence = splits[3]        
-        tokens = sentence.split(" ")
-        maxSentenceLen[fileIdx] = max(maxSentenceLen[fileIdx], len(tokens))
-        for token in tokens:
-            words[token.lower()] = True
-            
-
-print "Max Sentence Lengths: ",maxSentenceLen
-        
-# :: Read in word embeddings ::
 
 
 """
@@ -213,38 +172,89 @@ def loadFilteredEmbeddings(embeddingsPath, word2Idx):
             
     return embeddings
 
-word2Idx = getOrderedVocabulary(embeddings1Path, embeddings2Path, words)
-embeddings1 = loadFilteredEmbeddings(embeddings1Path, word2Idx)
-embeddings2 = loadFilteredEmbeddings(embeddings2Path, word2Idx)
 
-print "Embeddings (1) shape: ", embeddings1.shape
-print "Embeddings (2) shape: ", embeddings2.shape
-print "Len words: ", len(words)
+def preprocess(embeddings1Path, embeddings2Path, datafiles, pkl_dir):
+    outputFilePath = '%s/sem-relations.pkl.gz' % pkl_dir
+    embeddings1PklPath = '%s/embeddings1.pkl.gz' % pkl_dir
+    embeddings2PklPath = '%s/embeddings2.pkl.gz' % pkl_dir
 
-for (embeddings, embeddingsPklPath) in [
-            (embeddings1, embeddings1PklPath),
-            (embeddings2, embeddings2PklPath)
-        ]:
-    f = gzip.open(embeddingsPklPath, 'wb')
-    pkl.dump(embeddings, f, -1)
+    words = {}
+    maxSentenceLen = [0,0,0]
+    labelsDistribution = FreqDist()
+
+    distanceMapping = {'PADDING': 0, 'LowerMin': 1, 'GreaterMax': 2}
+    for dis in xrange(minDistance,maxDistance+1):
+        distanceMapping[dis] = len(distanceMapping)
+
+
+    for fileIdx in xrange(len(files)):
+        file = files[fileIdx]
+        for line in open(file):
+            splits = line.strip().split('\t')
+            
+            label = splits[0]
+            
+            
+            sentence = splits[3]        
+            tokens = sentence.split(" ")
+            maxSentenceLen[fileIdx] = max(maxSentenceLen[fileIdx], len(tokens))
+            for token in tokens:
+                words[token.lower()] = True
+                
+
+    print "Max Sentence Lengths: ",maxSentenceLen
+            
+    # :: Read in word embeddings ::
+
+
+
+    word2Idx = getOrderedVocabulary(embeddings1Path, embeddings2Path, words)
+    embeddings1 = loadFilteredEmbeddings(embeddings1Path, word2Idx)
+    embeddings2 = loadFilteredEmbeddings(embeddings2Path, word2Idx)
+
+    print "Embeddings (1) shape: ", embeddings1.shape
+    print "Embeddings (2) shape: ", embeddings2.shape
+    print "Len words: ", len(words)
+
+    for (embeddings, embeddingsPklPath) in [
+                (embeddings1, embeddings1PklPath),
+                (embeddings2, embeddings2PklPath)
+            ]:
+        f = gzip.open(embeddingsPklPath, 'wb')
+        pkl.dump(embeddings, f, -1)
+        f.close()
+
+    # :: Create token matrix ::
+    train_set = createMatrices(files[0], word2Idx, labelsDistribution, distanceMapping, max(maxSentenceLen))
+    test_set = createMatrices(files[1], word2Idx, labelsDistribution, distanceMapping, max(maxSentenceLen))
+
+
+
+    f = gzip.open(outputFilePath, 'wb')
+    pkl.dump(train_set, f, -1)
+    pkl.dump(test_set, f, -1)
     f.close()
 
-# :: Create token matrix ::
-train_set = createMatrices(files[0], word2Idx, max(maxSentenceLen))
-test_set = createMatrices(files[1], word2Idx, max(maxSentenceLen))
 
 
+    print "Data stored in pkl folder"
 
-f = gzip.open(outputFilePath, 'wb')
-pkl.dump(train_set, f, -1)
-pkl.dump(test_set, f, -1)
-f.close()
-
+    for label, freq in labelsDistribution.most_common(100):
+        print "%s : %f%%" % (label, 100*freq / float(labelsDistribution.N()))
 
 
-print "Data stored in pkl folder"
+if __name__=='__main__':
+    pkl_dir = 'pkl_tmp2'
 
-for label, freq in labelsDistribution.most_common(100):
-    print "%s : %f%%" % (label, 100*freq / float(labelsDistribution.N()))
-        
-        
+    #Download from https://levyomer.wordpress.com/2014/04/25/dependency-based-word-embeddings/ the deps.words.bz file
+    #and unzip it. Change the path here to the correct path for the embeddings file
+    #embeddingsPath = '/home/likewise-open/UKP/reimers/NLP/Models/Word Embeddings/English/levy_dependency_based.deps.words'
+    #embeddingsPath = '/fs/project/PAS1315/projgroup7/deeplearning4nlp-tutorial/2016-11_Seminar/Session 3 - Relation CNN/code/deps.words'
+    embeddings1Path = '/users/PAS1315/osu9099/5194-Project/embeddings/gigaword.sgns.txt'
+    embeddings2Path = '/users/PAS1315/osu9099/5194-Project/embeddings/wikipedia.sgns.txt'
+
+
+    folder = 'files/'
+    files = [folder+'train.txt', folder+'test.txt']
+
+    preprocess(embeddings1Path, embeddings2Path, files, pkl_dir)
