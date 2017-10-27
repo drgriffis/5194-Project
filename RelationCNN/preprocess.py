@@ -109,9 +109,11 @@ For obtaining word embedding features from the two domains, we do the following:
         c. otherwise, use that domain's UNKNOWN embedding
 """
 
-def getVocabularyUnion(embeddingsPath1, embeddingsPath2, words=set()):
+def getVocabularyUnion(embeddingsPath1, embeddingsPath2=None, words=set()):
     vocab = set()
-    for embeddingsPath in [embeddingsPath1, embeddingsPath2]:
+    paths = [embeddingsPath1]
+    if not embeddingsPath2 is None: paths.append(embeddingsPath2)
+    for embeddingsPath in paths:
         vocab = vocab.union(readEmbeddingVocabulary(embeddingsPath, words))
     return vocab
 
@@ -125,8 +127,8 @@ def readEmbeddingVocabulary(embeddingsPath, words):
             vocab.add(word)
     return vocab
 
-def getOrderedVocabulary(embeddingPath1, embeddingPath2, words):
-    union = getVocabularyUnion(embeddingPath1, embeddingPath2, words)
+def getOrderedVocabulary(embeddingsPath1, embeddingsPath2, words):
+    union = getVocabularyUnion(embeddingsPath1, embeddingsPath2, words)
     ordered = tuple(union)
 
     # base cases for word2Idx
@@ -176,7 +178,7 @@ def loadFilteredEmbeddings(embeddingsPath, word2Idx):
 def preprocess(embeddings1Path, embeddings2Path, datafiles, pkl_dir):
     outputFilePath = '%s/sem-relations.pkl.gz' % pkl_dir
     embeddings1PklPath = '%s/embeddings1.pkl.gz' % pkl_dir
-    embeddings2PklPath = '%s/embeddings2.pkl.gz' % pkl_dir
+    if embeddings2Path: embeddings2PklPath = '%s/embeddings2.pkl.gz' % pkl_dir
 
     words = {}
     maxSentenceLen = [0,0,0]
@@ -210,16 +212,15 @@ def preprocess(embeddings1Path, embeddings2Path, datafiles, pkl_dir):
 
     word2Idx = getOrderedVocabulary(embeddings1Path, embeddings2Path, words)
     embeddings1 = loadFilteredEmbeddings(embeddings1Path, word2Idx)
-    embeddings2 = loadFilteredEmbeddings(embeddings2Path, word2Idx)
+    if embeddings2Path: embeddings2 = loadFilteredEmbeddings(embeddings2Path, word2Idx)
 
     print "Embeddings (1) shape: ", embeddings1.shape
-    print "Embeddings (2) shape: ", embeddings2.shape
+    if embeddings2Path: print "Embeddings (2) shape: ", embeddings2.shape
     print "Len words: ", len(words)
 
-    for (embeddings, embeddingsPklPath) in [
-                (embeddings1, embeddings1PklPath),
-                (embeddings2, embeddings2PklPath)
-            ]:
+    output_pairs = [(embeddings1, embeddings1PklPath)]
+    if embeddings2Path: output_pairs.append((embeddings2, embeddings2PklPath))
+    for (embeddings, embeddingsPklPath) in output_pairs:
         f = gzip.open(embeddingsPklPath, 'wb')
         pkl.dump(embeddings, f, -1)
         f.close()
@@ -244,14 +245,15 @@ def preprocess(embeddings1Path, embeddings2Path, datafiles, pkl_dir):
 
 
 if __name__=='__main__':
-    pkl_dir = 'pkl_tmp2'
+    pkl_dir = 'pkl_tmp_single_vocab'
 
     #Download from https://levyomer.wordpress.com/2014/04/25/dependency-based-word-embeddings/ the deps.words.bz file
     #and unzip it. Change the path here to the correct path for the embeddings file
     #embeddingsPath = '/home/likewise-open/UKP/reimers/NLP/Models/Word Embeddings/English/levy_dependency_based.deps.words'
     #embeddingsPath = '/fs/project/PAS1315/projgroup7/deeplearning4nlp-tutorial/2016-11_Seminar/Session 3 - Relation CNN/code/deps.words'
     embeddings1Path = '/users/PAS1315/osu9099/5194-Project/embeddings/gigaword.sgns.txt'
-    embeddings2Path = '/users/PAS1315/osu9099/5194-Project/embeddings/wikipedia.sgns.txt'
+    #embeddings2Path = '/users/PAS1315/osu9099/5194-Project/embeddings/wikipedia.sgns.txt'
+    embeddings2Path = None   # use to generate single vocab only features
 
 
     folder = 'files/'
