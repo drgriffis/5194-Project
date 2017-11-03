@@ -19,17 +19,65 @@ Code was tested with:
 import numpy as np
 np.random.seed(1337)  # for reproducibility
 
+import sys
 import cPickle as pkl
 import gzip
 import keras
 from keras.preprocessing import sequence
-from keras.models import Sequential
+from keras.models import Sequential, Model
 from keras.layers.core import Dense, Dropout, Activation, Flatten
 from keras.layers.embeddings import Embedding
-from keras.layers import Convolution1D, MaxPooling1D, GlobalMaxPooling1D, Merge
-
+from keras.layers import Input, Convolution1D, MaxPooling1D, GlobalMaxPooling1D, Merge, GlobalAveragePooling1D
+from keras.layers.merge import Concatenate, Add
 from keras.utils import np_utils
+from keras.losses import categorical_crossentropy, binary_crossentropy
+from keras import backend as K
+from flipGradientTF import GradientReversal
 
+
+def AddDomainAdversarialClassifier(mapped_input, use_pooling=False):
+    """Takes a Keras object containing embeddings that have been mapped
+    to a common representation, and returns a binary domain classifier
+    with gradient reversal.
+    """
+    if use_pooling:
+        domain_pooled_input = GlobalAveragePooling1D()(mapped_input)
+        grad_rev = GradientReversal(1)(domain_pooled_input)
+    else:
+        grad_rev = GradientReversal(1)(mapped_input)
+    domain_transformer = Dense(1)(grad_rev)
+    domain_classifier = Activation('sigmoid')(domain_transformer)
+
+    return domain_classifier
+
+
+def AddSingleDomainWordEmbeddings(input_shape, embeddings):
+    input_words = Input(shape=[input_shape], name='word_indices')
+    word_embeddings = Embedding(embeddings.shape[0], embeddings.shape[1], weights=[embeddings], trainable=False, input_length=input_shape)
+    embedded_words = word_embeddings(input_words)
+
+    return ([input_words], embedded_words)
+
+def AddTwoDomainMappedWordEmbeddings(input_shape, embeddings1, embeddings2):
+    ## Word embeddings
+
+    input_words_dom1 = Input(shape=[input_shape], name='dom1_word_indices')
+    input_words_dom2 = Input(shape=[input_shape], name='dom2_word_indices')
+
+    word_embeddings_dom1 = Embedding(embeddings1.shape[0], embeddings1.shape[1], weights=[embeddings1], trainable=False, input_length=sentenceTrain.shape[1])
+    word_embeddings_dom2 = Embedding(embeddings2.shape[0], embeddings2.shape[1], weights=[embeddings2], trainable=False, input_length=sentenceTrain.shape[1])
+
+    embedded_words_dom1 = word_embeddings_dom1(input_words_dom1)
+    embedded_words_dom2 = word_embeddings_dom2(input_words_dom2)
+
+
+    ## Domain-agnostic embedding mapper
+
+    inter_domain_input = Add()([embedded_words_dom1, embedded_words_dom2])
+    domain_mapper = Dense(embeddings2.shape[1], activation='tanh')
+    mapped_input = domain_mapper(inter_domain_input)
+
+    return ([input_words_dom1, input_words_dom2], mapped_input)
 
 
 batch_size = 64
@@ -38,9 +86,14 @@ filter_length = 3
 hidden_dims = 100
 nb_epoch = 100
 position_dims = 50
+base_lambda = 0.4
+#domain_adaptation = True
+#pkl_dir = 'pkl_tmp'
+domain_adaptation = False
+pkl_dir = 'pkl_tmp_single_vocab'
 
 print "Load dataset"
-f = gzip.open('pkl/sem-relations.pkl.gz', 'rb')
+f = gzip.open('%s/sem-relations.pkl.gz' % pkl_dir, 'rb')
 yTrain, sentenceTrain, positionTrain1, positionTrain2 = pkl.load(f)
 yTest, sentenceTest, positionTest1, positionTest2  = pkl.load(f)
 f.close()
@@ -63,40 +116,108 @@ print "positionTest1: ", positionTest1.shape
 print "yTest: ", yTest.shape
 
 
-f = gzip.open('pkl/embeddings.pkl.gz', 'rb')
-embeddings = pkl.load(f)
-f.close()
+if domain_adaptation:
+    f = gzip.open('%s/embeddings1.pkl.gz' % pkl_dir, 'rb')
+    embeddings1 = pkl.load(f)
+    f.close()
+    print "Embeddings 1: ",embeddings1.shape
 
-print "Embeddings: ",embeddings.shape
-
-distanceModel1 = Sequential()
-distanceModel1.add(Embedding(max_position, position_dims, input_length=positionTrain1.shape[1]))
-
-distanceModel2 = Sequential()
-distanceModel2.add(Embedding(max_position, position_dims, input_length=positionTrain2.shape[1]))
-
-wordModel = Sequential()
-wordModel.add(Embedding(embeddings.shape[0], embeddings.shape[1], input_length=sentenceTrain.shape[1], weights=[embeddings], trainable=False))
-
-
-model = Sequential()
-model.add(Merge([wordModel, distanceModel1, distanceModel2], mode='concat'))
+    f = gzip.open('%s/embeddings1.pkl.gz' % pkl_dir, 'rb')
+    embeddings2 = pkl.load(f)
+    f.close()
+    print "Embeddings 2: ",embeddings2.shape
+else:
+    f = gzip.open('%s/embeddings1.pkl.gz' % pkl_dir, 'rb')
+    embeddings1 = pkl.load(f)
+    f.close()
+    print "Embeddings: ",embeddings1.shape
 
 
-model.add(Convolution1D(nb_filter=nb_filter,
+
+model_inputs = []
+model_outputs = []
+model_losses = []
+
+
+## Position embeddings
+
+input_positions_e1 = Input(shape=[positionTrain1.shape[1]], name='e1_positions')
+input_positions_e2 = Input(shape=[positionTrain2.shape[1]], name='e2_positions')
+
+position_embeddings_e1 = Embedding(max_position, position_dims, input_length=positionTrain1.shape[1])
+position_embeddings_e2 = Embedding(max_position, position_dims, input_length=positionTrain2.shape[1])
+
+embedded_positions_e1 = position_embeddings_e1(input_positions_e1)
+embedded_positions_e2 = position_embeddings_e2(input_positions_e2)
+
+model_inputs.append(input_positions_e1)
+model_inputs.append(input_positions_e2)
+
+
+## Word embeddings
+
+if domain_adaptation:
+    embedding_inputs, mapped_input = AddTwoDomainMappedWordEmbeddings(sentenceTrain.shape[1], embeddings1, embeddings2)
+else:
+    embedding_inputs, mapped_input = AddSingleDomainWordEmbeddings(sentenceTrain.shape[1], embeddings1)
+
+for inp in embedding_inputs: model_inputs.append(inp)
+
+## Convolutional model pipeline
+
+conv_input = Concatenate()([mapped_input, embedded_positions_e1, embedded_positions_e2])
+
+
+convolution = Convolution1D(nb_filter=nb_filter,
                         filter_length=filter_length,
                         border_mode='same',
                         activation='tanh',
-                        subsample_length=1))
+                        subsample_length=1)
+convolved = convolution(conv_input)
 # we use standard max over time pooling
-model.add(GlobalMaxPooling1D())
+pooled = GlobalMaxPooling1D()(convolved)
 
-model.add(Dropout(0.25))
-model.add(Dense(n_out, activation='softmax'))
+dropout = Dropout(0.25)(pooled)
+conv_prediction = Dense(n_out, activation='softmax')(dropout)
+model_outputs.append(conv_prediction)
 
 
-model.compile(loss='categorical_crossentropy',optimizer='Adam', metrics=['accuracy'])
-model.summary()
+## Domain adversarial classifier
+
+if domain_adaptation:
+    domain_classifier = AddDomainAdversarialClassifier(mapped_input, use_pooling=True)
+    model_outputs.append(domain_classifier)
+
+
+## Per-task loss functions
+
+tradeoff_param = Input(shape=(1,), name='tradeoff_param')
+model_inputs.append(tradeoff_param)
+
+def main_task_loss(y_pred, y_true):
+    raw_loss = categorical_crossentropy(y_pred, y_true)
+    return (1-tradeoff_param)*raw_loss
+
+def domain_classifier_loss(y_pred, y_true):
+    raw_loss = binary_crossentropy(y_pred, y_true)
+    return tradeoff_param*raw_loss
+
+if domain_adaptation: model_losses = [main_task_loss, domain_classifier_loss]
+else: model_losses = [main_task_loss]
+
+print(len(model_outputs))
+print(model_outputs)
+model = Model(
+    inputs=model_inputs,
+    outputs=model_outputs
+)
+model.compile(
+    loss=model_losses,
+    optimizer='Adam',
+    metrics=['accuracy']
+)
+
+
 print "Start training"
 
 
@@ -120,9 +241,106 @@ def getPrecision(pred_test, yTest, targetLabel):
     
     return float(correctTargetLabelCount) / targetLabelCount
 
+# after each epoch, check error on dev set
 for epoch in xrange(nb_epoch):       
-    model.fit([sentenceTrain, positionTrain1, positionTrain2], train_y_cat, batch_size=batch_size, verbose=True,nb_epoch=1)   
-    pred_test = model.predict_classes([sentenceTest, positionTest1, positionTest2], verbose=False)
+    
+    sys.stdout.write('[TRAINING] Starting iteration %d...\n' % (epoch+1))
+    
+    # shuffle training data at start of each epoch
+    data_indices = list(range(sentenceTrain.shape[0]))
+    np.random.shuffle(data_indices)
+
+    cur_batch_ix, nbatches = 0, 0
+    total_batches = np.ceil(sentenceTrain.shape[0]/float(batch_size))
+    while cur_batch_ix < sentenceTrain.shape[0]:
+        # get the next batch
+        next_batch_indices = data_indices[cur_batch_ix:cur_batch_ix+batch_size]
+        batch_sentences = sentenceTrain[next_batch_indices]
+        batch_labels = train_y_cat[next_batch_indices]
+        batch_positions1 = positionTrain1[next_batch_indices]
+        batch_positions2 = positionTrain2[next_batch_indices]
+
+        # choose domain
+        domain = np.random.choice(
+            [1,2],
+            p=[0.5, 0.5]
+        )
+        # source domain
+        if not domain_adaptation or domain == 1:
+            batch_sentences_1 = batch_sentences
+            batch_sentences_2 = np.zeros(batch_sentences.shape)  # "PADDING"
+            domain_labels = np.array([[0] for _ in range(batch_size)])
+            if domain_adaptation:
+                lmbda = base_lambda
+            else:
+                lmbda = 0
+        # target domain
+        elif domain_adaptation:
+            batch_sentences_1 = np.zeros(batch_sentences.shape)  # "PADDING"
+            batch_sentences_2 = batch_sentences
+            domain_labels = np.array([[1] for _ in range(batch_size)])
+            # choose if we will use the joint loss or domain loss only
+            loss_type = np.random.choice(
+                [1,2],
+                p=[1.0,0.0]
+            )
+            if loss_type == 1:
+                lmbda = base_lambda
+            else:
+                lmbda = 1
+
+        lmbda = np.array([[lmbda] for _ in range(batch_size)])
+
+        # set up the batch inputs
+        batch_inputs = [batch_positions1, batch_positions2]
+        if domain_adaptation:
+            batch_inputs.extend([batch_sentences_1, batch_sentences_2])
+        else:
+            batch_inputs.append(batch_sentences_1)
+        batch_inputs.append(lmbda)
+        # and the batch labels
+        if domain_adaptation:
+            batch_label_array = [batch_labels, domain_labels]
+            #pass
+        else:
+            batch_label_array = [batch_labels]
+
+        # train on it
+        model.train_on_batch(
+            batch_inputs,
+            batch_label_array
+        )
+
+        cur_batch_ix += batch_size
+        nbatches += 1
+
+        sys.stdout.write('  >> Processed %d/%d batches\r' % (nbatches, total_batches))
+        sys.stdout.flush()
+
+    # ran all batches!
+    sys.stdout.write('\n\n[TRAINING] Completed iteration %d.  Calculating dev set error:' % (epoch+1))
+
+    if domain_adaptation:
+        (soft_predictions, _) = model.predict(
+            [
+                positionTest1, 
+                positionTest2,
+                sentenceTest, 
+                sentenceTest, 
+                np.array([[0] for _ in range(sentenceTest.shape[0])])
+            ], verbose=False
+        )
+    else:
+        soft_predictions = model.predict(
+            [
+                positionTest1, 
+                positionTest2,
+                sentenceTest, 
+                np.array([[0] for _ in range(sentenceTest.shape[0])])
+            ], verbose=False
+        )
+
+    pred_test = np.argmax(soft_predictions, axis=1)
     
     dctLabels = np.sum(pred_test)
     totalDCTLabels = np.sum(yTest)

@@ -10,16 +10,8 @@ import cPickle as pkl
 from nltk import FreqDist
 import gzip
 
-outputFilePath = 'pkl/sem-relations.pkl.gz'
-embeddingsPklPath = 'pkl/embeddings.pkl.gz'
 
-#Download from https://levyomer.wordpress.com/2014/04/25/dependency-based-word-embeddings/ the deps.words.bz file
-#and unzip it. Change the path here to the correct path for the embeddings file
-embeddingsPath = '/home/likewise-open/UKP/reimers/NLP/Models/Word Embeddings/English/levy_dependency_based.deps.words'
-
-
-folder = 'files/'
-files = [folder+'train.txt', folder+'test.txt']
+## Globals
 
 #Mapping of the labels to integers
 labelsMapping = {'Other':0, 
@@ -33,22 +25,13 @@ labelsMapping = {'Other':0,
                  'Member-Collection(e1,e2)':15, 'Member-Collection(e2,e1)':16,
                  'Content-Container(e1,e2)':17, 'Content-Container(e2,e1)':18}
 
-
-
-
-words = {}
-maxSentenceLen = [0,0,0]
-labelsDistribution = FreqDist()
-
-distanceMapping = {'PADDING': 0, 'LowerMin': 1, 'GreaterMax': 2}
 minDistance = -30
 maxDistance = 30
-for dis in xrange(minDistance,maxDistance+1):
-    distanceMapping[dis] = len(distanceMapping)
 
 
 
-def createMatrices(file, word2Idx, maxSentenceLen=100):
+
+def createMatrices(file, word2Idx, labelsDistribution, distanceMapping, maxSentenceLen=100):
     """Creates matrices for the events and sentence for the given file"""
     labels = []
     positionMatrix1 = []
@@ -115,74 +98,165 @@ def getWordIdx(token, word2Idx):
 
 
 
-for fileIdx in xrange(len(files)):
-    file = files[fileIdx]
-    for line in open(file):
-        splits = line.strip().split('\t')
-        
-        label = splits[0]
-        
-        
-        sentence = splits[3]        
-        tokens = sentence.split(" ")
-        maxSentenceLen[fileIdx] = max(maxSentenceLen[fileIdx], len(tokens))
-        for token in tokens:
-            words[token.lower()] = True
+"""
+For obtaining word embedding features from the two domains, we do the following:
+    (1) take the union of the vocabularies from domain 1 and domain 2
+    (2) take the intersection of this with the words in the dataset
+    (3) order the resulting filtered vocabulary
+    (4) build the embedding matrix for each domain as follows:
+        a. iterate over the words in the ordered vocabulary
+        b. if the word is embedded in that domain, add its embedding
+        c. otherwise, use that domain's UNKNOWN embedding
+"""
+
+def getVocabularyUnion(embeddingsPath1, embeddingsPath2=None, words=set()):
+    vocab = set()
+    paths = [embeddingsPath1]
+    if not embeddingsPath2 is None: paths.append(embeddingsPath2)
+    for embeddingsPath in paths:
+        vocab = vocab.union(readEmbeddingVocabulary(embeddingsPath, words))
+    return vocab
+
+def readEmbeddingVocabulary(embeddingsPath, words):
+    vocab = set()
+    for line in open(embeddingsPath):
+        split = line.strip().split(" ")
+        word = split[0].lower()
+
+        if word in words:
+            vocab.add(word)
+    return vocab
+
+def getOrderedVocabulary(embeddingsPath1, embeddingsPath2, words):
+    union = getVocabularyUnion(embeddingsPath1, embeddingsPath2, words)
+    ordered = tuple(union)
+
+    # base cases for word2Idx
+    word2Idx = {
+        "PADDING": 0,
+        "UNKNOWN": 1
+    }
+
+    for word in ordered:
+        word2Idx[word] = len(word2Idx)
+
+    return word2Idx
+
+def loadFilteredEmbeddings(embeddingsPath, word2Idx):
+    # check how many dimensions are in the embedding file
+    with open(embeddingsPath) as f:
+        first_line = f.readline()
+        split = [s.strip() for s in first_line.split(" ")]
+        ndim = len(split) - 1  # account for the word itself
+
+    embeddings = np.zeros([len(word2Idx), ndim])
+    # add PADDING (this is unnecessary, since already zeros, but makes me feel better)
+    embeddings[word2Idx["PADDING"]] = np.zeros(ndim)
+    # add UNKNOWN
+    embeddings[word2Idx["UNKNOWN"]] = np.random.uniform(-0.25, 0.25, ndim)
+
+    # read in the embeddings specified in the file
+    words_seen = set()
+    for line in open(embeddingsPath):
+        split = line.strip().split(" ")
+        word = split[0].lower()
+        assert len(split) == ndim+1
+
+        if word in word2Idx:
+            vector = np.array([float(num) for num in split[1:]])
+            embeddings[word2Idx[word]] = vector
+            words_seen.add(word)
+
+    # copy UNKNOWN embedding for all unseen words
+    for word in word2Idx:
+        if not word in words_seen:
+            embeddings[word2Idx[word]] = embeddings[word2Idx["UNKNOWN"]]
             
-
-print "Max Sentence Lengths: ",maxSentenceLen
-        
-# :: Read in word embeddings ::
+    return embeddings
 
 
-word2Idx = {}
-embeddings = []
+def preprocess(embeddings1Path, embeddings2Path, datafiles, pkl_dir):
+    outputFilePath = '%s/sem-relations.pkl.gz' % pkl_dir
+    embeddings1PklPath = '%s/embeddings1.pkl.gz' % pkl_dir
+    if embeddings2Path: embeddings2PklPath = '%s/embeddings2.pkl.gz' % pkl_dir
+
+    words = {}
+    maxSentenceLen = [0,0,0]
+    labelsDistribution = FreqDist()
+
+    distanceMapping = {'PADDING': 0, 'LowerMin': 1, 'GreaterMax': 2}
+    for dis in xrange(minDistance,maxDistance+1):
+        distanceMapping[dis] = len(distanceMapping)
 
 
+    for fileIdx in xrange(len(files)):
+        file = files[fileIdx]
+        for line in open(file):
+            splits = line.strip().split('\t')
+            
+            label = splits[0]
+            
+            
+            sentence = splits[3]        
+            tokens = sentence.split(" ")
+            maxSentenceLen[fileIdx] = max(maxSentenceLen[fileIdx], len(tokens))
+            for token in tokens:
+                words[token.lower()] = True
+                
 
-for line in open(embeddingsPath):
-    split = line.strip().split(" ")
-    word = split[0]
-    
-    if len(word2Idx) == 0: #Add padding+unknown
-        word2Idx["PADDING"] = len(word2Idx)
-        vector = np.zeros(len(split)-1) #Zero vector vor 'PADDING' word
-        embeddings.append(vector)
-        
-        word2Idx["UNKNOWN"] = len(word2Idx)
-        vector = np.random.uniform(-0.25, 0.25, len(split)-1)
-        embeddings.append(vector)
-
-    if split[0].lower() in words:
-        vector = np.array([float(num) for num in split[1:]])
-        embeddings.append(vector)
-        word2Idx[split[0]] = len(word2Idx)
-        
-embeddings = np.array(embeddings)
-
-print "Embeddings shape: ", embeddings.shape
-print "Len words: ", len(words)
-
-f = gzip.open(embeddingsPklPath, 'wb')
-pkl.dump(embeddings, f, -1)
-f.close()
-
-# :: Create token matrix ::
-train_set = createMatrices(files[0], word2Idx, max(maxSentenceLen))
-test_set = createMatrices(files[1], word2Idx, max(maxSentenceLen))
+    print "Max Sentence Lengths: ",maxSentenceLen
+            
+    # :: Read in word embeddings ::
 
 
 
-f = gzip.open(outputFilePath, 'wb')
-pkl.dump(train_set, f, -1)
-pkl.dump(test_set, f, -1)
-f.close()
+    word2Idx = getOrderedVocabulary(embeddings1Path, embeddings2Path, words)
+    embeddings1 = loadFilteredEmbeddings(embeddings1Path, word2Idx)
+    if embeddings2Path: embeddings2 = loadFilteredEmbeddings(embeddings2Path, word2Idx)
+
+    print "Embeddings (1) shape: ", embeddings1.shape
+    if embeddings2Path: print "Embeddings (2) shape: ", embeddings2.shape
+    print "Len words: ", len(words)
+
+    output_pairs = [(embeddings1, embeddings1PklPath)]
+    if embeddings2Path: output_pairs.append((embeddings2, embeddings2PklPath))
+    for (embeddings, embeddingsPklPath) in output_pairs:
+        f = gzip.open(embeddingsPklPath, 'wb')
+        pkl.dump(embeddings, f, -1)
+        f.close()
+
+    # :: Create token matrix ::
+    train_set = createMatrices(files[0], word2Idx, labelsDistribution, distanceMapping, max(maxSentenceLen))
+    test_set = createMatrices(files[1], word2Idx, labelsDistribution, distanceMapping, max(maxSentenceLen))
 
 
 
-print "Data stored in pkl folder"
+    f = gzip.open(outputFilePath, 'wb')
+    pkl.dump(train_set, f, -1)
+    pkl.dump(test_set, f, -1)
+    f.close()
 
-for label, freq in labelsDistribution.most_common(100):
-    print "%s : %f%%" % (label, 100*freq / float(labelsDistribution.N()))
-        
-        
+
+
+    print "Data stored in pkl folder"
+
+    for label, freq in labelsDistribution.most_common(100):
+        print "%s : %f%%" % (label, 100*freq / float(labelsDistribution.N()))
+
+
+if __name__=='__main__':
+    pkl_dir = 'pkl_tmp_single_vocab'
+
+    #Download from https://levyomer.wordpress.com/2014/04/25/dependency-based-word-embeddings/ the deps.words.bz file
+    #and unzip it. Change the path here to the correct path for the embeddings file
+    #embeddingsPath = '/home/likewise-open/UKP/reimers/NLP/Models/Word Embeddings/English/levy_dependency_based.deps.words'
+    #embeddingsPath = '/fs/project/PAS1315/projgroup7/deeplearning4nlp-tutorial/2016-11_Seminar/Session 3 - Relation CNN/code/deps.words'
+    embeddings1Path = '/users/PAS1315/osu9099/5194-Project/embeddings/gigaword.sgns.txt'
+    #embeddings2Path = '/users/PAS1315/osu9099/5194-Project/embeddings/wikipedia.sgns.txt'
+    embeddings2Path = None   # use to generate single vocab only features
+
+
+    folder = 'files/'
+    files = [folder+'train.txt', folder+'test.txt']
+
+    preprocess(embeddings1Path, embeddings2Path, files, pkl_dir)
