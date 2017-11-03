@@ -273,6 +273,13 @@ if __name__=='__main__':
     #files = semeval_files
     #labelsMapping = semeval_labelsMapping
 
+    # SemEval - Gigaword SGNS + Wikipedia SGNS
+    pkl_dir = 'pkl_semeval_gigaword_wikipedia'
+    embeddings1Path = '/fs/project/PAS1315/projgroup7/embeddings/gigaword.sgns.txt'
+    embeddings2Path = '/fs/project/PAS1315/projgroup7/embeddings/wikipedia.sgns.txt'
+    files = semeval_files
+    labelsMapping = semeval_labelsMapping
+
     ## DDI - PubMed only
     #pkl_dir = 'pkl_ddi_pubmed'
     #embeddings1Path = '/fs/project/PAS1315/projgroup7/embeddings/Pubmed.txt'
@@ -288,12 +295,12 @@ if __name__=='__main__':
     #files = ddi_files
     #labelsMapping = ddi_labelsMapping
 
-    # DDI - Gigaword+Pubmed
-    pkl_dir = 'pkl_ddi_gigaword_pubmed'
-    embeddings1Path = '/fs/project/PAS1315/projgroup7/embeddings/gigaword.sgns.txt'
-    embeddings2Path = '/fs/project/PAS1315/projgroup7/embeddings/pubmed.sgns.txt'
-    files = ddi_files
-    labelsMapping = ddi_labelsMapping
+    ## DDI - Gigaword+Pubmed
+    #pkl_dir = 'pkl_ddi_gigaword_pubmed'
+    #embeddings1Path = '/fs/project/PAS1315/projgroup7/embeddings/gigaword.sgns.txt'
+    #embeddings2Path = '/fs/project/PAS1315/projgroup7/embeddings/pubmed.sgns.txt'
+    #files = ddi_files
+    #labelsMapping = ddi_labelsMapping
 
     if not os.path.isdir(pkl_dir):
         os.mkdir(pkl_dir)
