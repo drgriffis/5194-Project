@@ -90,15 +90,26 @@ max_epoch = 100
 convergence_threshold = 0.005
 eval_on_test_at_end = False
 position_dims = 50
-base_lambda = 0.4
+base_lambda = 0.4    # weight of the domain classifier loss
+eta = 0.3            # likelihood to use only the domain classifier loss,
+                     #   when training on a target domain sample
 #domain_adaptation = True
 #pkl_dir = 'pkl_tmp'
 #domain_adaptation = False
 #pkl_dir = 'pkl_tmp_single_vocab'
 domain_adaptation = True
-#pkl_dir = 'pkl_ddi_pubmed_gigaword'
-pkl_dir = 'pkl_ddi_gigaword_pubmed'
+pkl_dir = 'pkl_ddi_pubmed_gigaword'
+#pkl_dir = 'pkl_ddi_gigaword_pubmed'
 #pkl_dir = 'pkl_semeval_gigaword_wikipedia'
+
+
+if len(sys.argv) == 3:
+    base_lambda = float(sys.argv[1])
+    eta = float(sys.argv[2])
+    print '--- CLI OVERRIDES ---'
+    print '  base_lambda: %0.2f' % base_lambda
+    print '  eta: %0.2f' % eta
+    print
 
 print "Load dataset"
 f = gzip.open('%s/sem-relations.pkl.gz' % pkl_dir, 'rb')
@@ -318,7 +329,7 @@ while (epoch < min_epoch or f1_increase > convergence_threshold) and (epoch < ma
             # choose if we will use the joint loss or domain loss only
             loss_type = np.random.choice(
                 [1,2],
-                p=[1.0,0.0]
+                p=[1-eta,eta]
             )
             if loss_type == 1:
                 lmbda = base_lambda
