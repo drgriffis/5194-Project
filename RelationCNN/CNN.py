@@ -89,8 +89,10 @@ position_dims = 50
 base_lambda = 0.4
 #domain_adaptation = True
 #pkl_dir = 'pkl_tmp'
-domain_adaptation = False
-pkl_dir = 'pkl_tmp_single_vocab'
+#domain_adaptation = False
+#pkl_dir = 'pkl_tmp_single_vocab'
+domain_adaptation = True
+pkl_dir = 'pkl_ddi_pubmed_gigaword'
 
 print "Load dataset"
 f = gzip.open('%s/sem-relations.pkl.gz' % pkl_dir, 'rb')
@@ -205,8 +207,6 @@ def domain_classifier_loss(y_pred, y_true):
 if domain_adaptation: model_losses = [main_task_loss, domain_classifier_loss]
 else: model_losses = [main_task_loss]
 
-print(len(model_outputs))
-print(model_outputs)
 model = Model(
     inputs=model_inputs,
     outputs=model_outputs
@@ -269,7 +269,7 @@ for epoch in xrange(nb_epoch):
         if not domain_adaptation or domain == 1:
             batch_sentences_1 = batch_sentences
             batch_sentences_2 = np.zeros(batch_sentences.shape)  # "PADDING"
-            domain_labels = np.array([[0] for _ in range(batch_size)])
+            domain_labels = np.array([[0] for _ in range(batch_sentences.shape[0])])
             if domain_adaptation:
                 lmbda = base_lambda
             else:
@@ -278,7 +278,7 @@ for epoch in xrange(nb_epoch):
         elif domain_adaptation:
             batch_sentences_1 = np.zeros(batch_sentences.shape)  # "PADDING"
             batch_sentences_2 = batch_sentences
-            domain_labels = np.array([[1] for _ in range(batch_size)])
+            domain_labels = np.array([[1] for _ in range(batch_sentences.shape[0])])
             # choose if we will use the joint loss or domain loss only
             loss_type = np.random.choice(
                 [1,2],
@@ -289,7 +289,7 @@ for epoch in xrange(nb_epoch):
             else:
                 lmbda = 1
 
-        lmbda = np.array([[lmbda] for _ in range(batch_size)])
+        lmbda = np.array([[lmbda] for _ in range(batch_sentences.shape[0])])
 
         # set up the batch inputs
         batch_inputs = [batch_positions1, batch_positions2]
@@ -301,7 +301,6 @@ for epoch in xrange(nb_epoch):
         # and the batch labels
         if domain_adaptation:
             batch_label_array = [batch_labels, domain_labels]
-            #pass
         else:
             batch_label_array = [batch_labels]
 
