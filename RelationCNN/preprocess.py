@@ -183,7 +183,7 @@ def loadFilteredEmbeddings(embeddingsPath, word2Idx):
     return embeddings
 
 
-def preprocess(embeddings1Path, embeddings2Path, datafiles, labelsMapping, pkl_dir):
+def preprocess(embeddings1Path, embeddings2Path, files, labelsMapping, pkl_dir):
     outputFilePath = '%s/sem-relations.pkl.gz' % pkl_dir
     embeddings1PklPath = '%s/embeddings1.pkl.gz' % pkl_dir
     if embeddings2Path: embeddings2PklPath = '%s/embeddings2.pkl.gz' % pkl_dir
@@ -235,12 +235,14 @@ def preprocess(embeddings1Path, embeddings2Path, datafiles, labelsMapping, pkl_d
 
     # :: Create token matrix ::
     train_set = createMatrices(files[0], word2Idx, labelsDistribution, labelsMapping, distanceMapping, max(maxSentenceLen))
-    test_set = createMatrices(files[1], word2Idx, labelsDistribution, labelsMapping, distanceMapping, max(maxSentenceLen))
+    validation_set = createMatrices(files[1], word2Idx, labelsDistribution, labelsMapping, distanceMapping, max(maxSentenceLen))
+    test_set = createMatrices(files[2], word2Idx, labelsDistribution, labelsMapping, distanceMapping, max(maxSentenceLen))
 
 
 
     f = gzip.open(outputFilePath, 'wb')
     pkl.dump(train_set, f, -1)
+    pkl.dump(validation_set, f, -1)
     pkl.dump(test_set, f, -1)
     f.close()
 
@@ -253,11 +255,9 @@ def preprocess(embeddings1Path, embeddings2Path, datafiles, labelsMapping, pkl_d
 
 
 if __name__=='__main__':
-    pkl_dir = 'pkl_tmp_single_vocab'
-
     folder = 'files/'
-    semeval_files = [folder+'train.txt', folder+'test.txt']
-    ddi_files = [folder+'train_ddi.txt', folder+'test_ddi.txt']
+    semeval_files = [folder+'train_reduced.txt', folder+'validation.txt', folder+'test.txt']
+    ddi_files = [folder+'train_ddi_reduced.txt', folder+'validation_ddi.txt', folder+'test_ddi.txt']
     
     ## SemEval - Gigaword SGNS only
     #pkl_dir = 'pkl_semeval_gigaword_sgns'

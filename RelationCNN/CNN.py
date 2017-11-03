@@ -84,7 +84,9 @@ batch_size = 64
 filters = 100
 kernel_size = 3
 hidden_dims = 100
-nb_epoch = 100
+#nb_epoch = 100
+convergence_threshold = 0.005
+eval_on_test_at_end = True
 position_dims = 50
 base_lambda = 0.4
 #domain_adaptation = True
@@ -92,11 +94,13 @@ base_lambda = 0.4
 #domain_adaptation = False
 #pkl_dir = 'pkl_tmp_single_vocab'
 domain_adaptation = True
-pkl_dir = 'pkl_ddi_pubmed_gigaword'
+#pkl_dir = 'pkl_ddi_pubmed_gigaword'
+pkl_dir = 'pkl_ddi_gigaword_pubmed'
 
 print "Load dataset"
 f = gzip.open('%s/sem-relations.pkl.gz' % pkl_dir, 'rb')
 yTrain, sentenceTrain, positionTrain1, positionTrain2 = pkl.load(f)
+yDev, sentenceDev, positionDev1, positionDev2 = pkl.load(f)
 yTest, sentenceTest, positionTest1, positionTest2  = pkl.load(f)
 f.close()
 
@@ -110,8 +114,9 @@ print "sentenceTrain: ", sentenceTrain.shape
 print "positionTrain1: ", positionTrain1.shape
 print "yTrain: ", yTrain.shape
 
-
-
+print "sentenceDev: ", sentenceDev.shape
+print "positionDev1: ", positionDev1.shape
+print "yDev: ", yDev.shape
 
 print "sentenceTest: ", sentenceTest.shape
 print "positionTest1: ", positionTest1.shape
@@ -241,8 +246,36 @@ def getPrecision(pred_test, yTest, targetLabel):
     
     return float(correctTargetLabelCount) / targetLabelCount
 
-# after each epoch, check error on dev set
-for epoch in xrange(nb_epoch):       
+def evaluation(model, inputs, labels):
+    if domain_adaptation:
+        (soft_predictions, _) = model.predict(inputs, verbose=False)
+    else:
+        soft_predictions = model.predict(inputs, verbose=False)
+
+    predictions = np.argmax(soft_predictions, axis=1)
+    
+    dctLabels = np.sum(predictions)
+    totalDCTLabels = np.sum(labels)
+   
+    acc =  np.sum(predictions == labels) / float(len(labels))
+
+    f1Sum = 0
+    f1Count = 0
+    for targetLabel in xrange(1, max(labels)):        
+        prec = getPrecision(predictions, labels, targetLabel)
+        rec = getPrecision(labels, predictions, targetLabel)
+        f1 = 0 if (prec+rec) == 0 else 2*prec*rec/(prec+rec)
+        f1Sum += f1
+        f1Count +=1    
+        
+    macroF1 = f1Sum / float(f1Count)    
+
+    return (acc, macroF1)
+
+# train until F1 converges (or starts decreasing) on dev set
+epoch = 0
+prev_f1, f1_increase = 0, float('inf')
+while f1_increase > convergence_threshold:
     
     sys.stdout.write('[TRAINING] Starting iteration %d...\n' % (epoch+1))
     
@@ -317,47 +350,59 @@ for epoch in xrange(nb_epoch):
         sys.stdout.flush()
 
     # ran all batches!
-    sys.stdout.write('\n\n[TRAINING] Completed iteration %d.  Calculating dev set error:' % (epoch+1))
+    sys.stdout.write('\n\n[TRAINING] Completed iteration %d.  Calculating dev set error:\n' % (epoch+1))
 
     if domain_adaptation:
-        (soft_predictions, _) = model.predict(
-            [
-                positionTest1, 
-                positionTest2,
-                sentenceTest, 
-                sentenceTest, 
-                np.array([[0] for _ in range(sentenceTest.shape[0])])
-            ], verbose=False
-        )
+        inputs = [
+            positionDev1, 
+            positionDev2,
+            sentenceDev, 
+            sentenceDev, 
+            np.array([[0] for _ in range(sentenceDev.shape[0])])
+        ]
     else:
-        soft_predictions = model.predict(
-            [
-                positionTest1, 
-                positionTest2,
-                sentenceTest, 
-                np.array([[0] for _ in range(sentenceTest.shape[0])])
-            ], verbose=False
-        )
+        inputs = [
+            positionDev1, 
+            positionDev2,
+            sentenceDev, 
+            np.array([[0] for _ in range(sentenceDev.shape[0])])
+        ]
 
-    pred_test = np.argmax(soft_predictions, axis=1)
-    
-    dctLabels = np.sum(pred_test)
-    totalDCTLabels = np.sum(yTest)
-   
-    acc =  np.sum(pred_test == yTest) / float(len(yTest))
+    acc, macroF1 = evaluation(model, inputs, yDev)
+
     max_acc = max(max_acc, acc)
     print "Accuracy: %.4f (max: %.4f)" % (acc, max_acc)
 
-    f1Sum = 0
-    f1Count = 0
-    for targetLabel in xrange(1, max(yTest)):        
-        prec = getPrecision(pred_test, yTest, targetLabel)
-        rec = getPrecision(yTest, pred_test, targetLabel)
-        f1 = 0 if (prec+rec) == 0 else 2*prec*rec/(prec+rec)
-        f1Sum += f1
-        f1Count +=1    
-        
-        
-    macroF1 = f1Sum / float(f1Count)    
     max_f1 = max(max_f1, macroF1)
     print "Non-other Macro-Averaged F1: %.4f (max: %.4f)\n" % (macroF1, max_f1)
+
+    f1_increase = macroF1 - prev_f1
+    prev_f1 = macroF1
+
+    epoch += 1
+
+print('>>> Training complete in %d iterations! <<<' % epoch)
+
+## If specified, evaluate on the test set at the end
+if eval_on_test_at_end:
+    sys.stdout.write('\n\n[TESTING] Evaluating trained model on test set.\n')
+
+    if domain_adaptation:
+        inputs = [
+            positionTest1, 
+            positionTest2,
+            sentenceTest, 
+            sentenceTest, 
+            np.array([[0] for _ in range(sentenceTest.shape[0])])
+        ]
+    else:
+        inputs = [
+            positionTest1, 
+            positionTest2,
+            sentenceTest, 
+            np.array([[0] for _ in range(sentenceTest.shape[0])])
+        ]
+
+    acc, macroF1 = evaluation(model, inputs, yTest)
+    print "Test set accuracy: %.4f" % acc
+    print "Non-other Macro-Averaged F1: %.4f\n" % macroF1
