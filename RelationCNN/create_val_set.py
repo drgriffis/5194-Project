@@ -1,7 +1,7 @@
 import numpy as np
 import os
 valid_set,train_set,reduced_train_set= [],[],[]
-with open('/users/PAS1315/osu9082/5194-Project/RelationCNN/files/train.txt') as f:
+with open('/users/PAS1315/osu9082/5194-Project/RelationCNN/files/train_ddi.txt') as f:
 
      for line in f:
          line = line.strip('\n')
@@ -15,7 +15,7 @@ for v in train_set:
         reduced_train_set.append(v)
 
 
-with open('validation','w') as f:
+with open('validation_ddi','w') as f:
   for line in valid_set:
     line=line.strip('\n')
     line=line.split('\t')
@@ -25,7 +25,7 @@ with open('validation','w') as f:
         else:
            f.write(line[i]+os.linesep)
 
-with open('reduced_train','w') as f:
+with open('reduced_train_ddi','w') as f:
   for line in reduced_train_set:
     line=line.strip('\n')
     line=line.split('\t')
