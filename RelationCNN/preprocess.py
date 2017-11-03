@@ -9,12 +9,13 @@ import numpy as np
 import cPickle as pkl
 from nltk import FreqDist
 import gzip
+import os
 
 
 ## Globals
 
 #Mapping of the labels to integers
-labelsMapping = {'Other':0, 
+semeval_labelsMapping = {'Other':0, 
                  'Message-Topic(e1,e2)':1, 'Message-Topic(e2,e1)':2, 
                  'Product-Producer(e1,e2)':3, 'Product-Producer(e2,e1)':4, 
                  'Instrument-Agency(e1,e2)':5, 'Instrument-Agency(e2,e1)':6, 
@@ -24,6 +25,13 @@ labelsMapping = {'Other':0,
                  'Entity-Origin(e1,e2)':13, 'Entity-Origin(e2,e1)':14,
                  'Member-Collection(e1,e2)':15, 'Member-Collection(e2,e1)':16,
                  'Content-Container(e1,e2)':17, 'Content-Container(e2,e1)':18}
+ddi_labelsMapping = {
+    'None(e1,e2)' : 0,
+    'effect(e1,e2)' : 1,
+    'advise(e1,e2)' : 2,
+    'mechanism(e1,e2)' : 3,
+    'int(e1,e2)' : 4
+}
 
 minDistance = -30
 maxDistance = 30
@@ -31,7 +39,7 @@ maxDistance = 30
 
 
 
-def createMatrices(file, word2Idx, labelsDistribution, distanceMapping, maxSentenceLen=100):
+def createMatrices(file, word2Idx, labelsDistribution, labelsMapping, distanceMapping, maxSentenceLen=100):
     """Creates matrices for the events and sentence for the given file"""
     labels = []
     positionMatrix1 = []
@@ -158,7 +166,7 @@ def loadFilteredEmbeddings(embeddingsPath, word2Idx):
     # read in the embeddings specified in the file
     words_seen = set()
     for line in open(embeddingsPath):
-        split = line.strip().split(" ")
+        split = [s.strip() for s in line.split(" ")]
         word = split[0].lower()
         assert len(split) == ndim+1
 
@@ -175,7 +183,7 @@ def loadFilteredEmbeddings(embeddingsPath, word2Idx):
     return embeddings
 
 
-def preprocess(embeddings1Path, embeddings2Path, datafiles, pkl_dir):
+def preprocess(embeddings1Path, embeddings2Path, datafiles, labelsMapping, pkl_dir):
     outputFilePath = '%s/sem-relations.pkl.gz' % pkl_dir
     embeddings1PklPath = '%s/embeddings1.pkl.gz' % pkl_dir
     if embeddings2Path: embeddings2PklPath = '%s/embeddings2.pkl.gz' % pkl_dir
@@ -226,8 +234,8 @@ def preprocess(embeddings1Path, embeddings2Path, datafiles, pkl_dir):
         f.close()
 
     # :: Create token matrix ::
-    train_set = createMatrices(files[0], word2Idx, labelsDistribution, distanceMapping, max(maxSentenceLen))
-    test_set = createMatrices(files[1], word2Idx, labelsDistribution, distanceMapping, max(maxSentenceLen))
+    train_set = createMatrices(files[0], word2Idx, labelsDistribution, labelsMapping, distanceMapping, max(maxSentenceLen))
+    test_set = createMatrices(files[1], word2Idx, labelsDistribution, labelsMapping, distanceMapping, max(maxSentenceLen))
 
 
 
@@ -247,16 +255,47 @@ def preprocess(embeddings1Path, embeddings2Path, datafiles, pkl_dir):
 if __name__=='__main__':
     pkl_dir = 'pkl_tmp_single_vocab'
 
-    #Download from https://levyomer.wordpress.com/2014/04/25/dependency-based-word-embeddings/ the deps.words.bz file
-    #and unzip it. Change the path here to the correct path for the embeddings file
-    #embeddingsPath = '/home/likewise-open/UKP/reimers/NLP/Models/Word Embeddings/English/levy_dependency_based.deps.words'
-    #embeddingsPath = '/fs/project/PAS1315/projgroup7/deeplearning4nlp-tutorial/2016-11_Seminar/Session 3 - Relation CNN/code/deps.words'
-    embeddings1Path = '/users/PAS1315/osu9099/5194-Project/embeddings/gigaword.sgns.txt'
-    #embeddings2Path = '/users/PAS1315/osu9099/5194-Project/embeddings/wikipedia.sgns.txt'
-    embeddings2Path = None   # use to generate single vocab only features
-
-
     folder = 'files/'
-    files = [folder+'train.txt', folder+'test.txt']
+    semeval_files = [folder+'train.txt', folder+'test.txt']
+    ddi_files = [folder+'train_ddi.txt', folder+'test_ddi.txt']
+    
+    ## SemEval - Gigaword SGNS only
+    #pkl_dir = 'pkl_semeval_gigaword_sgns'
+    #embeddings1Path = '/fs/project/PAS1315/projgroup7/embeddings/gigaword.sgns.txt'
+    #embeddings2Path = None
+    #files = semeval_files
+    #labelsMapping = semeval_labelsMapping
 
-    preprocess(embeddings1Path, embeddings2Path, files, pkl_dir)
+    ## SemEval - Wikipedia SGNS only
+    #pkl_dir = 'pkl_semeval_wikipedia_sgns'
+    #embeddings1Path = '/fs/project/PAS1315/projgroup7/embeddings/wikipedia.sgns.txt'
+    #embeddings2Path = None
+    #files = semeval_files
+    #labelsMapping = semeval_labelsMapping
+
+    ## DDI - PubMed only
+    #pkl_dir = 'pkl_ddi_pubmed'
+    #embeddings1Path = '/fs/project/PAS1315/projgroup7/embeddings/Pubmed.txt'
+    #embeddings2Path = None
+    #files = ddi_files
+    #labelsMapping = ddi_labelsMapping
+
+    ## DDI - PubMed+Gigaword
+    #pkl_dir = 'pkl_ddi_pubmed_gigaword'
+    ##embeddings1Path = '/fs/project/PAS1315/projgroup7/embeddings/Pubmed.txt'
+    #embeddings1Path = '/fs/project/PAS1315/projgroup7/embeddings/pubmed.sgns.txt'
+    #embeddings2Path = '/fs/project/PAS1315/projgroup7/embeddings/gigaword.sgns.txt'
+    #files = ddi_files
+    #labelsMapping = ddi_labelsMapping
+
+    # DDI - Gigaword+Pubmed
+    pkl_dir = 'pkl_ddi_gigaword_pubmed'
+    embeddings1Path = '/fs/project/PAS1315/projgroup7/embeddings/gigaword.sgns.txt'
+    embeddings2Path = '/fs/project/PAS1315/projgroup7/embeddings/pubmed.sgns.txt'
+    files = ddi_files
+    labelsMapping = ddi_labelsMapping
+
+    if not os.path.isdir(pkl_dir):
+        os.mkdir(pkl_dir)
+
+    preprocess(embeddings1Path, embeddings2Path, files, labelsMapping, pkl_dir)
