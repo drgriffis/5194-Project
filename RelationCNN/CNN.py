@@ -58,7 +58,7 @@ def AddSingleDomainWordEmbeddings(input_shape, embeddings):
 
     return ([input_words], embedded_words)
 
-def AddTwoDomainMappedWordEmbeddings(input_shape, embeddings1, embeddings2):
+def AddTwoDomainMappedWordEmbeddings(input_shape, mapped_size, embeddings1, embeddings2):
     ## Word embeddings
 
     input_words_dom1 = Input(shape=[input_shape], name='dom1_word_indices')
@@ -73,8 +73,8 @@ def AddTwoDomainMappedWordEmbeddings(input_shape, embeddings1, embeddings2):
 
     ## Domain-agnostic embedding mapper
 
-    inter_domain_input = Add()([embedded_words_dom1, embedded_words_dom2])
-    domain_mapper = Dense(embeddings2.shape[1], activation='tanh')
+    inter_domain_input = Concatenate()([embedded_words_dom1, embedded_words_dom2])
+    domain_mapper = Dense(mapped_size, activation='tanh')
     mapped_input = domain_mapper(inter_domain_input)
 
     return ([input_words_dom1, input_words_dom2], mapped_input)
@@ -84,9 +84,11 @@ batch_size = 64
 filters = 100
 kernel_size = 3
 hidden_dims = 100
-#nb_epoch = 100
+mapped_dims = 100
+min_epoch = 100
+max_epoch = 100
 convergence_threshold = 0.005
-eval_on_test_at_end = True
+eval_on_test_at_end = False
 position_dims = 50
 base_lambda = 0.4
 #domain_adaptation = True
@@ -96,6 +98,7 @@ base_lambda = 0.4
 domain_adaptation = True
 #pkl_dir = 'pkl_ddi_pubmed_gigaword'
 pkl_dir = 'pkl_ddi_gigaword_pubmed'
+#pkl_dir = 'pkl_semeval_gigaword_wikipedia'
 
 print "Load dataset"
 f = gzip.open('%s/sem-relations.pkl.gz' % pkl_dir, 'rb')
@@ -129,7 +132,7 @@ if domain_adaptation:
     f.close()
     print "Embeddings 1: ",embeddings1.shape
 
-    f = gzip.open('%s/embeddings1.pkl.gz' % pkl_dir, 'rb')
+    f = gzip.open('%s/embeddings2.pkl.gz' % pkl_dir, 'rb')
     embeddings2 = pkl.load(f)
     f.close()
     print "Embeddings 2: ",embeddings2.shape
@@ -164,7 +167,7 @@ model_inputs.append(input_positions_e2)
 ## Word embeddings
 
 if domain_adaptation:
-    embedding_inputs, mapped_input = AddTwoDomainMappedWordEmbeddings(sentenceTrain.shape[1], embeddings1, embeddings2)
+    embedding_inputs, mapped_input = AddTwoDomainMappedWordEmbeddings(sentenceTrain.shape[1], mapped_dims, embeddings1, embeddings2)
 else:
     embedding_inputs, mapped_input = AddSingleDomainWordEmbeddings(sentenceTrain.shape[1], embeddings1)
 
@@ -275,7 +278,7 @@ def evaluation(model, inputs, labels):
 # train until F1 converges (or starts decreasing) on dev set
 epoch = 0
 prev_f1, f1_increase = 0, float('inf')
-while f1_increase > convergence_threshold:
+while (epoch < min_epoch or f1_increase > convergence_threshold) and (epoch < max_epoch):
     
     sys.stdout.write('[TRAINING] Starting iteration %d...\n' % (epoch+1))
     
