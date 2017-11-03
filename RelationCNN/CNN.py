@@ -27,7 +27,7 @@ from keras.preprocessing import sequence
 from keras.models import Sequential, Model
 from keras.layers.core import Dense, Dropout, Activation, Flatten
 from keras.layers.embeddings import Embedding
-from keras.layers import Input, Convolution1D, MaxPooling1D, GlobalMaxPooling1D, Merge, GlobalAveragePooling1D
+from keras.layers import Input, Conv1D, MaxPooling1D, GlobalMaxPooling1D, Merge, GlobalAveragePooling1D
 from keras.layers.merge import Concatenate, Add
 from keras.utils import np_utils
 from keras.losses import categorical_crossentropy, binary_crossentropy
@@ -81,8 +81,8 @@ def AddTwoDomainMappedWordEmbeddings(input_shape, embeddings1, embeddings2):
 
 
 batch_size = 64
-nb_filter = 100
-filter_length = 3
+filters = 100
+kernel_size = 3
 hidden_dims = 100
 nb_epoch = 100
 position_dims = 50
@@ -170,11 +170,11 @@ for inp in embedding_inputs: model_inputs.append(inp)
 conv_input = Concatenate()([mapped_input, embedded_positions_e1, embedded_positions_e2])
 
 
-convolution = Convolution1D(nb_filter=nb_filter,
-                        filter_length=filter_length,
-                        border_mode='same',
+convolution = Conv1D(filters=filters,
+                        kernel_size=kernel_size,
+                        padding='same',
                         activation='tanh',
-                        subsample_length=1)
+                        strides=1)
 convolved = convolution(conv_input)
 # we use standard max over time pooling
 pooled = GlobalMaxPooling1D()(convolved)
