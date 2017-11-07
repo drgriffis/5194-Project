@@ -32,6 +32,7 @@ from keras.layers.merge import Concatenate, Add
 from keras.utils import np_utils
 from keras.losses import categorical_crossentropy, binary_crossentropy
 from keras import backend as K
+from keras.models import load_model
 from flipGradientTF import GradientReversal
 
 
@@ -90,8 +91,8 @@ max_epoch = 100
 convergence_threshold = 0.005
 eval_on_test_at_end = False
 position_dims = 50
-base_lambda = 0.4    # weight of the domain classifier loss
-eta = 0.3            # likelihood to use only the domain classifier loss,
+base_lambda = 0.1    # weight of the domain classifier loss
+eta = 0.6            # likelihood to use only the domain classifier loss,
                      #   when training on a target domain sample
 #domain_adaptation = True
 #pkl_dir = 'pkl_tmp'
@@ -101,6 +102,8 @@ domain_adaptation = True
 pkl_dir = 'pkl_ddi_pubmed_gigaword'
 #pkl_dir = 'pkl_ddi_gigaword_pubmed'
 #pkl_dir = 'pkl_semeval_gigaword_wikipedia'
+modelf = '%s/best_hp_model.h5' % pkl_dir
+best_iter = 0
 
 
 if len(sys.argv) == 3:
@@ -395,11 +398,20 @@ while (epoch < min_epoch or f1_increase > convergence_threshold) and (epoch < ma
 
     epoch += 1
 
+    # save the best-performing model (ON DEV)
+    if macroF1 == max_f1 and eval_on_test_at_end:
+        print '   >> SAVING MODEL WEIGHTS'
+        model.save_weights(modelf)
+        best_iter = epoch
+
 print('>>> Training complete in %d iterations! <<<' % epoch)
+print('>>> Best model performance on dev at epoch %d <<<' % best_iter)
 
 ## If specified, evaluate on the test set at the end
 if eval_on_test_at_end:
     sys.stdout.write('\n\n[TESTING] Evaluating trained model on test set.\n')
+    print('>>> Loading model from epoch %d <<<' % best_iter)
+    model.load_weights(modelf)
 
     if domain_adaptation:
         inputs = [
