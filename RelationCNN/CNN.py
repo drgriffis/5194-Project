@@ -62,11 +62,11 @@ def AddSingleDomainWordEmbeddings(input_shape, embeddings):
 def AddTwoDomainMappedWordEmbeddings(input_shape, mapped_size, embeddings1, embeddings2):
     ## Word embeddings
 
-    input_words_dom1 = Input(shape=[input_shape], name='dom1_word_indices')
-    input_words_dom2 = Input(shape=[input_shape], name='dom2_word_indices')
+    input_words_dom1 = Input(shape=[input_shape], name='source_word_indices')
+    input_words_dom2 = Input(shape=[input_shape], name='target_word_indices')
 
-    word_embeddings_dom1 = Embedding(embeddings1.shape[0], embeddings1.shape[1], weights=[embeddings1], trainable=False, input_length=sentenceTrain.shape[1])
-    word_embeddings_dom2 = Embedding(embeddings2.shape[0], embeddings2.shape[1], weights=[embeddings2], trainable=False, input_length=sentenceTrain.shape[1])
+    word_embeddings_dom1 = Embedding(embeddings1.shape[0], embeddings1.shape[1], weights=[embeddings1], trainable=False, input_length=sentenceTrain.shape[1], name='source_embeddings')
+    word_embeddings_dom2 = Embedding(embeddings2.shape[0], embeddings2.shape[1], weights=[embeddings2], trainable=False, input_length=sentenceTrain.shape[1], name='target_embeddings')
 
     embedded_words_dom1 = word_embeddings_dom1(input_words_dom1)
     embedded_words_dom2 = word_embeddings_dom2(input_words_dom2)
@@ -321,8 +321,10 @@ while (epoch < min_epoch or f1_increase > convergence_threshold) and (epoch < ma
             batch_sentences_2 = np.zeros(batch_sentences.shape)  # "PADDING"
             domain_labels = np.array([[0] for _ in range(batch_sentences.shape[0])])
             if domain_adaptation:
+                # multi-objective
                 lmbda = base_lambda
             else:
+                # main objective only
                 lmbda = 0
         # target domain
         elif domain_adaptation:
@@ -334,8 +336,10 @@ while (epoch < min_epoch or f1_increase > convergence_threshold) and (epoch < ma
                 [1,2],
                 p=[1-eta,eta]
             )
+            # using joint loss
             if loss_type == 1:
                 lmbda = base_lambda
+            # using domain loss only
             else:
                 lmbda = 1
 
@@ -373,8 +377,8 @@ while (epoch < min_epoch or f1_increase > convergence_threshold) and (epoch < ma
         inputs = [
             positionDev1, 
             positionDev2,
-            sentenceDev, 
-            sentenceDev, 
+            np.zeros(sentenceDev.shape), # not using source domain
+            sentenceDev,                 # testing from target domain
             np.array([[0] for _ in range(sentenceDev.shape[0])])
         ]
     else:
@@ -417,8 +421,8 @@ if eval_on_test_at_end:
         inputs = [
             positionTest1, 
             positionTest2,
-            sentenceTest, 
-            sentenceTest, 
+            np.zeros(sentenceTest.shape), # not using source domain
+            sentenceTest,                 # testing from target domain
             np.array([[0] for _ in range(sentenceTest.shape[0])])
         ]
     else:
