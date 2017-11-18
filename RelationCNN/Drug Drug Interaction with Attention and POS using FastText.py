@@ -286,6 +286,26 @@ print "Embeddings: ",embeddings.shape
 
 ######################## MODEL with POS and trainable attention and Bidirectional LSTM
 
+class MyLayer(Layer):
+
+    def __init__(self, **kwargs):
+        super(MyLayer, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        # Create a trainable weight variable for this layer.
+        self.W_shape = (300,300)
+        self.kernel = self.add_weight(name='kernel',
+                                      shape=(self.W_shape),
+                                      initializer='uniform',
+                                      trainable=True)
+        super(MyLayer, self).build(input_shape)  # Be sure to call this somewhere!
+
+    def call(self, x):
+        return K.dot(x, self.kernel)
+
+    def compute_output_shape(self, input_shape):
+        return (input_shape)
+
 def get_R(X):
     U_w, vecT = X[0], X[1]
     print U_w.shape, vecT.shape
@@ -396,3 +416,5 @@ for epoch in xrange(50):
     print "Non-other Macro-Averaged F1: %.4f (max: %.4f)\n" % (macroF1, max_f1)
 
 ################################################## Training terminates ###################################################
+
+main_model.save("attention.model")
