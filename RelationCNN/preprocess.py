@@ -15,16 +15,28 @@ import os
 ## Globals
 
 #Mapping of the labels to integers
-semeval_labelsMapping = {'Other':0, 
-                 'Message-Topic(e1,e2)':1, 'Message-Topic(e2,e1)':2, 
-                 'Product-Producer(e1,e2)':3, 'Product-Producer(e2,e1)':4, 
-                 'Instrument-Agency(e1,e2)':5, 'Instrument-Agency(e2,e1)':6, 
-                 'Entity-Destination(e1,e2)':7, 'Entity-Destination(e2,e1)':8,
-                 'Cause-Effect(e1,e2)':9, 'Cause-Effect(e2,e1)':10,
-                 'Component-Whole(e1,e2)':11, 'Component-Whole(e2,e1)':12,  
-                 'Entity-Origin(e1,e2)':13, 'Entity-Origin(e2,e1)':14,
-                 'Member-Collection(e1,e2)':15, 'Member-Collection(e2,e1)':16,
-                 'Content-Container(e1,e2)':17, 'Content-Container(e2,e1)':18}
+semeval_labelsMapping = {
+    'Other' : 0, 
+    'Message-Topic(e1,e2)' : 1,
+    'Message-Topic(e2,e1)' : 2, 
+    'Product-Producer(e1,e2)' : 3, 
+    'Product-Producer(e2,e1)' : 4, 
+    'Instrument-Agency(e1,e2)' : 5,
+    'Instrument-Agency(e2,e1)' : 6, 
+    'Entity-Destination(e1,e2)' : 7,
+    'Entity-Destination(e2,e1)' : 8,
+    'Cause-Effect(e1,e2)' : 9,
+    'Cause-Effect(e2,e1)' : 10,
+    'Component-Whole(e1,e2)' : 11,
+    'Component-Whole(e2,e1)' : 12,  
+    'Entity-Origin(e1,e2)' : 13,
+    'Entity-Origin(e2,e1)' : 14,
+    'Member-Collection(e1,e2)' : 15,
+    'Member-Collection(e2,e1)' : 16,
+    'Content-Container(e1,e2)' : 17,
+    'Content-Container(e2,e1)' : 18
+}
+
 ddi_labelsMapping = {
     'None(e1,e2)' : 0,
     'effect(e1,e2)' : 1,
@@ -189,7 +201,7 @@ def preprocess(embeddings1Path, embeddings2Path, files, labelsMapping, pkl_dir):
     if embeddings2Path: embeddings2PklPath = '%s/embeddings2.pkl.gz' % pkl_dir
 
     words = {}
-    maxSentenceLen = [0,0,0]
+    maxSentenceLen = [0]*len(files)
     labelsDistribution = FreqDist()
 
     distanceMapping = {'PADDING': 0, 'LowerMin': 1, 'GreaterMax': 2}
@@ -236,14 +248,17 @@ def preprocess(embeddings1Path, embeddings2Path, files, labelsMapping, pkl_dir):
     # :: Create token matrix ::
     train_set = createMatrices(files[0], word2Idx, labelsDistribution, labelsMapping, distanceMapping, max(maxSentenceLen))
     validation_set = createMatrices(files[1], word2Idx, labelsDistribution, labelsMapping, distanceMapping, max(maxSentenceLen))
-    test_set = createMatrices(files[2], word2Idx, labelsDistribution, labelsMapping, distanceMapping, max(maxSentenceLen))
+    if len(files) > 2:
+        test_set = createMatrices(files[2], word2Idx, labelsDistribution, labelsMapping, distanceMapping, max(maxSentenceLen))
 
 
 
     f = gzip.open(outputFilePath, 'wb')
+    pkl.dump(np.array([len(files)]), f, -1)
     pkl.dump(train_set, f, -1)
     pkl.dump(validation_set, f, -1)
-    pkl.dump(test_set, f, -1)
+    if len(files) > 2:
+        pkl.dump(test_set, f, -1)
     f.close()
 
 
@@ -251,13 +266,45 @@ def preprocess(embeddings1Path, embeddings2Path, files, labelsMapping, pkl_dir):
     print "Data stored in pkl folder"
 
     for label, freq in labelsDistribution.most_common(100):
-        print "%s : %f%%" % (label, 100*freq / float(labelsDistribution.N()))
+        print "%s : %f%% (%d)" % (label, 100*freq / float(labelsDistribution.N()), freq)
 
 
 if __name__=='__main__':
-    folder = 'files/'
-    semeval_files = [folder+'train_reduced.txt', folder+'validation.txt', folder+'test.txt']
-    ddi_files = [folder+'train_ddi_reduced.txt', folder+'validation_ddi.txt', folder+'test_ddi.txt']
+    def _cli():
+        import optparse
+        parser = optparse.OptionParser(usage='Usage: %prog PKLDIR')
+        parser.add_option('--source-embeddings', dest='src_embf',
+            help='path to embeddings from source domain (REQUIRED)')
+        parser.add_option('--target-embeddings', dest='trg_embf',
+            help='path to embeddings from target domain (optional)')
+        parser.add_option('--train', dest='trainf',
+            help='training data file (REQUIRED)')
+        parser.add_option('--validation', dest='valf',
+            help='validation data file')
+        parser.add_option('--test', dest='testf',
+            help='test data file')
+        parser.add_option('--dataset', dest='dataset',
+            type='choice', choices=['DDI', 'SemEval'],
+            default='DDI',
+            help='label set to use (default: %default)')
+        (options, args) = parser.parse_args()
+        if len(args) != 1 or not options.src_embf or not options.trainf:
+            parser.print_help()
+            exit()
+        return args[0], options.src_embf, options.trg_embf, options.trainf, options.valf, options.testf, options.dataset
+
+    pkl_dir, embeddings1Path, embeddings2Path, trainf, valf, testf, dataset = _cli()
+    labelsMapping = semeval_labelsMapping if dataset == 'SemEval' else ddi_labelsMapping
+    files = [trainf]
+    if valf: files.append(valf)
+    if testf: files.append(testf)
+
+    #fold = 4
+    #folder = 'files/'
+    #semeval_files = [folder+'train_reduced.txt', folder+'validation.txt', folder+'test.txt']
+    #ddi_files = [folder+'train_ddi_reduced.txt', folder+'validation_ddi.txt', folder+'test_ddi.txt']
+    #folder = 'files/xval_ddi/fold%d/' % fold
+    #ddi_files = [folder+'train_ddi_reduced.txt', folder+'validation_ddi.txt']
     
     ## SemEval - Gigaword SGNS only
     #pkl_dir = 'pkl_semeval_gigaword_sgns'
@@ -273,12 +320,12 @@ if __name__=='__main__':
     #files = semeval_files
     #labelsMapping = semeval_labelsMapping
 
-    # SemEval - Gigaword SGNS + Wikipedia SGNS
-    pkl_dir = 'pkl_semeval_gigaword_wikipedia'
-    embeddings1Path = '/fs/project/PAS1315/projgroup7/embeddings/gigaword.sgns.txt'
-    embeddings2Path = '/fs/project/PAS1315/projgroup7/embeddings/wikipedia.sgns.txt'
-    files = semeval_files
-    labelsMapping = semeval_labelsMapping
+    ## SemEval - Gigaword SGNS + Wikipedia SGNS
+    #pkl_dir = 'pkl_semeval_gigaword_wikipedia'
+    #embeddings1Path = '/fs/project/PAS1315/projgroup7/embeddings/gigaword.sgns.txt'
+    #embeddings2Path = '/fs/project/PAS1315/projgroup7/embeddings/wikipedia.sgns.txt'
+    #files = semeval_files
+    #labelsMapping = semeval_labelsMapping
 
     ## DDI - PubMed only
     #pkl_dir = 'pkl_ddi_pubmed'
@@ -287,16 +334,17 @@ if __name__=='__main__':
     #files = ddi_files
     #labelsMapping = ddi_labelsMapping
 
-    ## DDI - PubMed+Gigaword
-    #pkl_dir = 'pkl_ddi_pubmed_gigaword'
-    ##embeddings1Path = '/fs/project/PAS1315/projgroup7/embeddings/Pubmed.txt'
+    # DDI - PubMed+Gigaword
+    #pkl_dir = 'pkl_ddi_pubmed_gigaword/xfold/fold%d' % fold
+    #pkl_dir = 'pkl_tmp'
+    #embeddings1Path = '/fs/project/PAS1315/projgroup7/embeddings/Pubmed.txt'
     #embeddings1Path = '/fs/project/PAS1315/projgroup7/embeddings/pubmed.sgns.txt'
     #embeddings2Path = '/fs/project/PAS1315/projgroup7/embeddings/gigaword.sgns.txt'
     #files = ddi_files
     #labelsMapping = ddi_labelsMapping
 
     ## DDI - Gigaword+Pubmed
-    #pkl_dir = 'pkl_ddi_gigaword_pubmed'
+    #pkl_dir = 'pkl_ddi_gigaword_pubmed/xfold/fold%d' % fold
     #embeddings1Path = '/fs/project/PAS1315/projgroup7/embeddings/gigaword.sgns.txt'
     #embeddings2Path = '/fs/project/PAS1315/projgroup7/embeddings/pubmed.sgns.txt'
     #files = ddi_files
