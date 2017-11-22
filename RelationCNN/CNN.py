@@ -94,31 +94,60 @@ position_dims = 50
 base_lambda = 0.1    # weight of the domain classifier loss
 eta = 0.6            # likelihood to use only the domain classifier loss,
                      #   when training on a target domain sample
-#domain_adaptation = True
-#pkl_dir = 'pkl_tmp'
-#domain_adaptation = False
-#pkl_dir = 'pkl_tmp_single_vocab'
 domain_adaptation = True
-pkl_dir = 'pkl_ddi_pubmed_gigaword'
-#pkl_dir = 'pkl_ddi_gigaword_pubmed'
-#pkl_dir = 'pkl_semeval_gigaword_wikipedia'
+pkl_dir = 'pkl_tmp'
+
 modelf = '%s/best_hp_model.h5' % pkl_dir
 best_iter = 0
 
+def _cli():
+    global pkl_dir, base_lambda, eta
+    import optparse
+    parser = optparse.OptionParser(usage='Usage: %prog')
+    parser.add_option('--datadir', dest='datadir',
+        help='directory with pickle files',
+        default=pkl_dir)
+    parser.add_option('--lambda', dest='lmbda',
+        type='float', default=base_lambda,
+        help='multitask weight (0=main task only, 1=domain classifier only; default: %default)')
+    parser.add_option('--eta', dest='eta',
+        type='float', default=eta,
+        help='DANN-only sampling rate (0=always joint loss, 1=always DANN only (for target domain); default: %default)')
+    parser.add_option('--no-adapt', dest='noadapt',
+        action='store_true', default=False,
+        help='Disable domain adaptation (uses embeddings1 as the only embeddings)')
+    parser.add_option('--test', dest='test',
+        action='store_true', default=eval_on_test_at_end,
+        help='Enable evaluation on test set at end of training')
+    (options, args) = parser.parse_args()
 
-if len(sys.argv) == 3:
-    base_lambda = float(sys.argv[1])
-    eta = float(sys.argv[2])
-    print '--- CLI OVERRIDES ---'
-    print '  base_lambda: %0.2f' % base_lambda
-    print '  eta: %0.2f' % eta
-    print
+    if options.lmbda != base_lambda:
+        print '[CLI OVERRIDE] lambda = %.4f' % options.lmbda
+    if options.eta != eta:
+        print '[CLI OVERRIDE] eta = %.4f' % options.eta
+    return options.datadir, options.lmbda, options.eta, options.noadapt, options.test
 
-print "Load dataset"
+pkl_dir, base_lambda, eta, noadapt, eval_on_test_at_end = _cli()
+domain_adaptation = not noadapt
+
+print "Loading dataset from %s" % pkl_dir
 f = gzip.open('%s/sem-relations.pkl.gz' % pkl_dir, 'rb')
-yTrain, sentenceTrain, positionTrain1, positionTrain2 = pkl.load(f)
+first_array = pkl.load(f)
+
+if type(first_array) is tuple or first_array.shape != (1,):
+    yTrain, sentenceTrain, positionTrain1, positionTrain2 = first_array
+    nfiles = 3
+    print ' >> Assuming train/dev/test'
+else:
+    nfiles = first_array[0]
+    if nfiles == 2: print ' >> Using train/dev'
+    elif nfiles == 3: print ' >> Using train/dev/test'
+    yTrain, sentenceTrain, positionTrain1, positionTrain2 = pkl.load(f)
+
 yDev, sentenceDev, positionDev1, positionDev2 = pkl.load(f)
-yTest, sentenceTest, positionTest1, positionTest2  = pkl.load(f)
+
+if nfiles > 2:
+    yTest, sentenceTest, positionTest1, positionTest2  = pkl.load(f)
 f.close()
 
 max_position = max(np.max(positionTrain1), np.max(positionTrain2))+1
@@ -135,9 +164,10 @@ print "sentenceDev: ", sentenceDev.shape
 print "positionDev1: ", positionDev1.shape
 print "yDev: ", yDev.shape
 
-print "sentenceTest: ", sentenceTest.shape
-print "positionTest1: ", positionTest1.shape
-print "yTest: ", yTest.shape
+if nfiles > 2:
+    print "sentenceTest: ", sentenceTest.shape
+    print "positionTest1: ", positionTest1.shape
+    print "yTest: ", yTest.shape
 
 
 if domain_adaptation:
