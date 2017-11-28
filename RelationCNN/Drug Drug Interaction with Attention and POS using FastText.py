@@ -19,6 +19,7 @@ from keras.regularizers import l2
 from keras.callbacks import *
 from keras.models import *
 from keras.optimizers import * 
+from keras.activations import softmax
 
 from IPython.display import SVG
 
@@ -81,8 +82,8 @@ def createMatrices(file, word2Idx, pos_tags_dict, maxSentenceLen=100):
         for idx in xrange(0, min(maxSentenceLen, len(tokens))):
             tokenIds[idx] = getWordIdx(tokens[idx], word2Idx)
             pos_tags_Ids[idx] = pos_tags_dict[pos_tags[idx]]
-            distance1 = idx - int(pos1)
-            distance2 = idx - int(pos2)
+            distance1 = idx - int(pos1)/2
+            distance2 = idx - int(pos2)/2
             
             if distance1 == 0:
                 e1 = tokenIds[idx]
@@ -165,7 +166,7 @@ for fileIdx in xrange(len(files)):
         
         sentence = splits[3]  
         tokens = sentence.split(" ")
-        maxSentenceLen[fileIdx] = max(maxSentenceLen[fileIdx], len(tokens))
+        maxSentenceLen[fileIdx] = max(maxSentenceLen[fileIdx], len(tokens)/2)
         for token in tokens:
             words[token.lower()] = True
     print len(words)
@@ -312,16 +313,16 @@ def get_R(X):
     ans = K.batch_dot(U_w, vecT)
     return ans
 
-Input1 = Input(shape=(146,))
+Input1 = Input(shape=(73,))
 distanceModel1 = Embedding(max_position, position_dims, input_length=positionTrain1.shape[1])(Input1)
 
-Input2 = Input(shape=(146,))
+Input2 = Input(shape=(73,))
 distanceModel2 = Embedding(max_position, position_dims, input_length=positionTrain2.shape[1])(Input2)
 
-Input6 = Input(shape=(146,))
+Input6 = Input(shape=(73,))
 POSModel2 =Embedding(len(pos_tags_dict), position_dims, input_length=pos_tags_train.shape[1])(Input6)
 
-Input3 = Input(shape=(146,))
+Input3 = Input(shape=(73,))
 Input4 = Input(shape=(1,))
 Input5 = Input(shape=(1,))
 wordModel = Input3
@@ -343,18 +344,18 @@ print x_embed.shape
 W1x = MyLayer()(x_embed)
 print W1x.shape
 W2x = MyLayer()(x_embed)
-A1 = merge([W1x, e1_embed], output_shape=(146, 1), mode=get_R)
+A1 = merge([W1x, e1_embed], output_shape=(73, 1), mode=get_R)
 A1 = Lambda(lambda x: x / 300)(A1)
 print A1.shape
-A2 = merge([W2x, e2_embed], output_shape=(146, 1), mode=get_R)
+A2 = merge([W2x, e2_embed], output_shape=(73, 1), mode=get_R)
 A2 = Lambda(lambda x: x / 300)(A2)
 print A2.shape
-alpha1 = Activation("softmax")(A1)
-alpha2 = Activation("softmax")(A2)
+alpha1 = Lambda(lambda x: softmax(x, axis=0), name="alpha1")(A1)
+alpha2 = Lambda(lambda x: softmax(x, axis=0), name="alpha2")(A2)
 alpha = average([alpha1, alpha2])
 alpha = Flatten()(alpha)
 alpha = RepeatVector(300)(alpha)
-alpha = Reshape([146, 300])(alpha)
+alpha = Reshape([73, 300])(alpha)
 print alpha.shape
 att_output = multiply([x_embed, alpha])
 
@@ -417,4 +418,4 @@ for epoch in xrange(50):
 
 ################################################## Training terminates ###################################################
 
-main_model.save("attention.model")
+#main_model.save("attention.model")
