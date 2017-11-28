@@ -97,9 +97,6 @@ eta = 0.6            # likelihood to use only the domain classifier loss,
 domain_adaptation = True
 pkl_dir = 'pkl_tmp'
 
-modelf = '%s/best_hp_model.h5' % pkl_dir
-best_iter = 0
-
 def _cli():
     global pkl_dir, base_lambda, eta
     import optparse
@@ -129,6 +126,9 @@ def _cli():
 
 pkl_dir, base_lambda, eta, noadapt, eval_on_test_at_end = _cli()
 domain_adaptation = not noadapt
+
+modelf = '%s/best_hp_model.h5' % pkl_dir
+best_iter = 0
 
 print "Loading dataset from %s" % pkl_dir
 f = gzip.open('%s/sem-relations.pkl.gz' % pkl_dir, 'rb')
@@ -444,7 +444,7 @@ print('>>> Best model performance on dev at epoch %d <<<' % best_iter)
 ## If specified, evaluate on the test set at the end
 if eval_on_test_at_end:
     sys.stdout.write('\n\n[TESTING] Evaluating trained model on test set.\n')
-    print('>>> Loading model from epoch %d <<<' % best_iter)
+    print('>>> Loading model from epoch %d (model file: %s) <<<' % (best_iter, modelf))
     model.load_weights(modelf)
 
     if domain_adaptation:
