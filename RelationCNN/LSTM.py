@@ -38,8 +38,8 @@ nb_filter = 100
 filter_length = 3
 hidden_dims = 100
 mapped_dims = 100
-min_epoch = 100
-max_epoch = 100
+min_epoch = 50
+max_epoch = 50
 convergence_threshold = 0.005
 eval_on_test_at_end = False
 position_dims = 50
@@ -49,7 +49,6 @@ eta = 0.6            # likelihood to use only the domain classifier loss,
 domain_adaptation = True
 pkl_dir = 'pkl_tmp'
 
-#embdim = 300
 embdim = 100
 sentlen = 73
 poslen = 31
@@ -158,31 +157,117 @@ else:
 
 ######################## MODEL with POS and trainable attention and Bidirectional LSTM
 
-class MyLayer(Layer):
+def dot_product(x, kernel):
+    """
+    Wrapper for dot product operation, in order to be compatible with both
+    Theano and Tensorflow
+    Args:
+        x (): input
+        kernel (): weights
+    Returns:
+    """
+    if K.backend() == 'tensorflow':
+        return K.squeeze(K.dot(x, K.expand_dims(kernel)), axis=-1)
+    else:
+        return K.dot(x, kernel)
+    
 
-    def __init__(self, **kwargs):
-        super(MyLayer, self).__init__(**kwargs)
+class AttentionWithContext(Layer):
+    """
+    Attention operation, with a context/query vector, for temporal data.
+    Supports Masking.
+    Follows the work of Yang et al. [https://www.cs.cmu.edu/~diyiy/docs/naacl16.pdf]
+    "Hierarchical Attention Networks for Document Classification"
+    by using a context vector to assist the attention
+    # Input shape
+        3D tensor with shape: `(samples, steps, features)`.
+    # Output shape
+        2D tensor with shape: `(samples, features)`.
+    How to use:
+    Just put it on top of an RNN Layer (GRU/LSTM/SimpleRNN) with return_sequences=True.
+    The dimensions are inferred based on the output shape of the RNN.
+    Note: The layer has been tested with Keras 2.0.6
+    Example:
+        model.add(LSTM(64, return_sequences=True))
+        model.add(AttentionWithContext())
+        # next add a Dense layer (for classification/regression) or whatever...
+    """
+
+    def __init__(self,
+                 W_regularizer=None, u_regularizer=None, b_regularizer=None,
+                 W_constraint=None, u_constraint=None, b_constraint=None,
+                 bias=True, **kwargs):
+
+        self.supports_masking = True
+        self.init = initializers.get('glorot_uniform')
+
+        self.W_regularizer = regularizers.get(W_regularizer)
+        self.u_regularizer = regularizers.get(u_regularizer)
+        self.b_regularizer = regularizers.get(b_regularizer)
+
+        self.W_constraint = constraints.get(W_constraint)
+        self.u_constraint = constraints.get(u_constraint)
+        self.b_constraint = constraints.get(b_constraint)
+
+        self.bias = bias
+        super(AttentionWithContext, self).__init__(**kwargs)
 
     def build(self, input_shape):
-        # Create a trainable weight variable for this layer.
-        self.W_shape = (embdim,embdim)
-        self.kernel = self.add_weight(name='kernel',
-                                      shape=(self.W_shape),
-                                      initializer='uniform',
-                                      trainable=True)
-        super(MyLayer, self).build(input_shape)  # Be sure to call this somewhere!
+        assert len(input_shape) == 3
 
-    def call(self, x):
-        return K.dot(x, self.kernel)
+        self.W = self.add_weight((input_shape[-1], input_shape[-1],),
+                                 initializer=self.init,
+                                 name='{}_W'.format(self.name),
+                                 regularizer=self.W_regularizer,
+                                 constraint=self.W_constraint)
+        if self.bias:
+            self.b = self.add_weight((input_shape[-1],),
+                                     initializer='zero',
+                                     name='{}_b'.format(self.name),
+                                     regularizer=self.b_regularizer,
+                                     constraint=self.b_constraint)
 
+        self.u = self.add_weight((input_shape[-1],),
+                                 initializer=self.init,
+                                 name='{}_u'.format(self.name),
+                                 regularizer=self.u_regularizer,
+                                 constraint=self.u_constraint)
+
+        super(AttentionWithContext, self).build(input_shape)
+
+    def compute_mask(self, input, input_mask=None):
+        # do not pass the mask to the next layers
+        return None
+
+    def call(self, x, mask=None):
+        uit = dot_product(x, self.W)
+
+        if self.bias:
+            uit += self.b
+
+        uit = K.tanh(uit)
+        #ait = K.dot(uit, self.u)
+        ait = dot_product(uit, self.u)
+        a = K.exp(ait)
+
+        # apply mask after the exp. will be re-normalized next
+        if mask is not None:
+            # Cast the mask to floatX to avoid float64 upcasting in theano
+            a *= K.cast(mask, K.floatx())
+
+        # in some cases especially in the early stages of training the sum may be almost zero
+        # and this results in NaN's. A workaround is to add a very small positive number \epsilon to the sum.
+        # a /= K.cast(K.sum(a, axis=1, keepdims=True), K.floatx())
+        a /= K.cast(K.sum(a, axis=1, keepdims=True) + K.epsilon(), K.floatx())
+
+        a = K.expand_dims(a)
+        weighted_input = x * a
+        #return K.sum(weighted_input, axis=1)
+        print "here", weighted_input.shape
+        return weighted_input
+        
     def compute_output_shape(self, input_shape):
-        return (input_shape)
-
-def get_R(X):
-    U_w, vecT = X[0], X[1]
-    print U_w.shape, vecT.shape
-    ans = K.batch_dot(U_w, vecT)
-    return ans
+        return input_shape[0], input_shape[1], input_shape[2]
 
 def AddDomainAdversarialClassifier(mapped_input, use_pooling=False):
     """Takes a Keras object containing embeddings that have been mapped
@@ -201,56 +286,27 @@ def AddDomainAdversarialClassifier(mapped_input, use_pooling=False):
 
 def AddSingleDomainWordEmbeddings(input_shape, embeddings):
     input_words = Input(shape=[input_shape], name='word_indices')
-    input_e1 = Input(shape=(1,), name='e1_token')
-    input_e2 = Input(shape=(1,), name='e2_token')
-
     word_embeddings = Embedding(embeddings.shape[0], embeddings.shape[1], weights=[embeddings], trainable=False, input_length=input_shape)
-    e_embeddings = Embedding(embeddings.shape[0], embeddings.shape[1], weights=[embeddings], trainable=False)
-
     embedded_words = word_embeddings(input_words)
-    embedded_e1 = e_embeddings(input_e1)
-    embedded_e2 = e_embeddings(input_e2)
-
-    return ([input_words, input_e1, input_e2], embedded_words, embedded_e1, embedded_e2)
+    return ([input_words], embedded_words)
 
 def AddTwoDomainMappedWordEmbeddings(input_shape, mapped_size, embeddings1, embeddings2):
     input_words_dom1 = Input(shape=[input_shape], name='source_word_indices')
     input_words_dom2 = Input(shape=[input_shape], name='target_word_indices')
-    input_e1_dom1 = Input(shape=(1,), name='source_e1_token')
-    input_e1_dom2 = Input(shape=(1,), name='target_e1_token')
-    input_e2_dom1 = Input(shape=(1,), name='source_e2_token')
-    input_e2_dom2 = Input(shape=(1,), name='target_e2_token')
 
     word_embeddings_dom1 = Embedding(embeddings1.shape[0], embeddings1.shape[1], weights=[embeddings1], trainable=False, input_length=sentenceTrain.shape[1], name='source_embeddings')
     word_embeddings_dom2 = Embedding(embeddings2.shape[0], embeddings2.shape[1], weights=[embeddings2], trainable=False, input_length=sentenceTrain.shape[1], name='target_embeddings')
-    e_embeddings_dom1 = Embedding(embeddings1.shape[0], embeddings1.shape[1], weights=[embeddings1], trainable=False, name='source_entity_embeddings')
-    e_embeddings_dom2 = Embedding(embeddings2.shape[0], embeddings2.shape[1], weights=[embeddings2], trainable=False, name='target_entity_embeddings')
 
     embedded_words_dom1 = word_embeddings_dom1(input_words_dom1)
     embedded_words_dom2 = word_embeddings_dom2(input_words_dom2)
-    embedded_e1_dom1 = e_embeddings_dom1(input_e1_dom1)
-    embedded_e1_dom2 = e_embeddings_dom2(input_e1_dom2)
-    embedded_e2_dom1 = e_embeddings_dom1(input_e2_dom1)
-    embedded_e2_dom2 = e_embeddings_dom2(input_e2_dom2)
-
 
     ## Domain-agnostic embedding mapper
 
     inter_domain_input = Concatenate()([embedded_words_dom1, embedded_words_dom2])
-    inter_domain_e1 = Concatenate()([embedded_e1_dom1, embedded_e1_dom2])
-    inter_domain_e2 = Concatenate()([embedded_e2_dom1, embedded_e2_dom2])
-
     domain_mapper = Dense(mapped_size, activation='tanh')
-
     mapped_input = domain_mapper(inter_domain_input)
-    mapped_e1 = domain_mapper(inter_domain_e1)
-    mapped_e2 = domain_mapper(inter_domain_e2)
 
-    return ([
-        input_words_dom1, input_words_dom2,
-        input_e1_dom1, input_e1_dom2,
-        input_e2_dom1, input_e2_dom2
-    ], mapped_input, mapped_e1, mapped_e2)
+    return ([input_words_dom1, input_words_dom2], mapped_input)
 
 
 model_inputs = []
@@ -277,62 +333,16 @@ model_inputs.append(inp_postags)
 ## Word embedding (domain-sensitive) inputs
 
 if domain_adaptation:
-    embedding_inputs, mapped_words, e1_embed, e2_embed = AddTwoDomainMappedWordEmbeddings(sentlen, mapped_dims, embeddings1, embeddings2)
+    embedding_inputs, wordModel = AddTwoDomainMappedWordEmbeddings(sentlen, mapped_dims, embeddings1, embeddings2)
     embdim = mapped_dims
 else:
-    embedding_inputs, mapped_words, e1_embed, e2_embed = AddSingleDomainWordEmbeddings(sentlen, embeddings1)
+    embedding_inputs, wordModel = AddSingleDomainWordEmbeddings(sentlen, embeddings1)
 
 for inp in embedding_inputs: model_inputs.append(inp)
 
-
-#Input3 = Input(shape=(sentlen,))  # sentence tokens
-#Input4 = Input(shape=(1,))    # e1 token
-#Input5 = Input(shape=(1,))    # e2 token
-#wordModel = Input3
-#wordModel = Embedding(embeddings.shape[0], embeddings.shape[1],
-#                      input_length=sentenceTrain.shape[1], weights=[embeddings], trainable=False)(wordModel)
-#e1Model = Embedding(embeddings.shape[0], embeddings.shape[1],
-#                      input_length=1, weights=[embeddings], trainable=False)(Input4)
-#e2Model = Embedding(embeddings.shape[0], embeddings.shape[1],
-#                      input_length=1, weights=[embeddings], trainable=False)(Input5)
-#
-#
-#x_embed = wordModel
-#e1_embed = e1Model
-e1_embed =  Reshape([embdim,1])(e1_embed)
-#e2_embed = e2Model
-e2_embed =  Reshape([embdim,1])(e2_embed)
-
-print mapped_words.shape
-W1x = MyLayer()(mapped_words)
-print W1x.shape
-W2x = MyLayer()(mapped_words)
-A1 = merge([W1x, e1_embed], output_shape=(sentlen, 1), mode=get_R)
-A1 = Lambda(lambda x: x / embdim)(A1)
-print A1.shape
-A2 = merge([W2x, e2_embed], output_shape=(sentlen, 1), mode=get_R)
-A2 = Lambda(lambda x: x / embdim)(A2)
-print A2.shape
-#alpha1 = Activation("softmax")(A1)
-#alpha2 = Activation("softmax")(A2)
-alpha1 = Lambda(lambda x: softmax(x,axis=0))(A1)
-alpha2 = Lambda(lambda x: softmax(x,axis=0))(A2)
-alpha = average([alpha1, alpha2])
-alpha = Flatten()(alpha)
-alpha = RepeatVector(embdim)(alpha)
-alpha = Reshape([sentlen, embdim])(alpha)
-print alpha.shape
-att_output = multiply([mapped_words, alpha])
-
-
-c_models = merge([distanceModel1, distanceModel2, POSModel2, att_output], mode='concat', concat_axis=-1)
-
-c_models = Convolution1D(nb_filter=nb_filter,
-                        filter_length=filter_length,
-                        border_mode='same',
-                        activation='tanh',
-                        subsample_length=1)(c_models)
-
+wordModel = Bidirectional(LSTM(150, return_sequences = True))(wordModel)
+wordModel = AttentionWithContext()(wordModel)
+c_models = Concatenate(axis = -1)([distanceModel1, distanceModel2, POSModel2, wordModel])
 c_models = Bidirectional(LSTM(150))(c_models)
 c_models = Dropout(0.25)(c_models)
 c_models = Dense(n_out, activation='softmax')(c_models)
@@ -374,53 +384,12 @@ model.compile(
 )
 
 
-#main_model = Model(inputs=model_inputs, outputs=c_models)
-#main_model.compile(loss='categorical_crossentropy',optimizer='rmsprop')
-#main_model.summary()
-
-
 ################################################## Model Complete ####################################################
 
 
 ################################################## Training begins ###################################################
 
-#print "Start training"
-#max_prec, max_rec, max_acc, max_f1 = 0,0,0,0
-#for epoch in xrange(50):
-#    print epoch
-#    main_model.fit([positionTrain1, positionTrain2, pos_tags_train, sentenceTrain, e1Train, e2Train], train_y_cat, batch_size=batch_size, verbose=True,nb_epoch=1)
-#    pred_vals = main_model.predict([ positionTest1, positionTest2, pos_tags_test, sentenceTest, e1Test, e2Test], verbose=False)
-#    pred_test = []
-#    for idx in range(len(pred_vals)):
-#        pred_test.append(np.argmax(pred_vals[idx]))
-#
-#    pred_test=np.array(pred_test)
-#    dctLabels = np.sum(pred_test)
-#    totalDCTLabels = np.sum(yTest)
-#
-#    acc =  np.sum(pred_test == yTest) / float(len(yTest))
-#    max_acc = max(max_acc, acc)
-#    print "Accuracy: %.4f (max: %.4f)" % (acc, max_acc)
-#
-#    f1Sum = 0
-#    f1Count = 0
-#    for targetLabel in xrange(0, max(yTest)+1):
-#        prec = getPrecision(pred_test, yTest, targetLabel)
-#        rec = getPrecision(yTest, pred_test, targetLabel)
-#        f1 = 0 if (prec+rec) == 0 else 2*prec*rec/(prec+rec)
-#        #print f1
-#        f1Sum += f1
-#        f1Count +=1
-#
-#
-#    macroF1 = f1Sum / float(f1Count)
-#    max_f1 = max(max_f1, macroF1)
-#    print "Non-other Macro-Averaged F1: %.4f (max: %.4f)\n" % (macroF1, max_f1)
-
-
 print "Start training"
-
-
 
 max_prec, max_rec, max_acc, max_f1 = 0,0,0,0
 
@@ -488,8 +457,6 @@ while (epoch < min_epoch or f1_increase > convergence_threshold) and (epoch < ma
         batch_positions1 = positionTrain1[next_batch_indices]
         batch_positions2 = positionTrain2[next_batch_indices]
         batch_postags = pos_tags_train[next_batch_indices]
-        batch_e1 = e1Train[next_batch_indices]
-        batch_e2 = e2Train[next_batch_indices]
 
         # choose domain
         domain = np.random.choice(
@@ -500,10 +467,6 @@ while (epoch < min_epoch or f1_increase > convergence_threshold) and (epoch < ma
         if not domain_adaptation or domain == 1:
             batch_sentences_1 = batch_sentences
             batch_sentences_2 = np.zeros(batch_sentences.shape)  # "PADDING"
-            batch_e1_1 = batch_e1
-            batch_e1_2 = np.zeros(batch_e1.shape)
-            batch_e2_1 = batch_e2
-            batch_e2_2 = np.zeros(batch_e2.shape)
             domain_labels = np.array([[0] for _ in range(batch_sentences.shape[0])])
             if domain_adaptation:
                 # multi-objective
@@ -515,10 +478,6 @@ while (epoch < min_epoch or f1_increase > convergence_threshold) and (epoch < ma
         elif domain_adaptation:
             batch_sentences_1 = np.zeros(batch_sentences.shape)  # "PADDING"
             batch_sentences_2 = batch_sentences
-            batch_e1_1 = np.zeros(batch_e1.shape)
-            batch_e1_2 = batch_e1
-            batch_e2_1 = np.zeros(batch_e2.shape)
-            batch_e2_2 = batch_e2
             domain_labels = np.array([[1] for _ in range(batch_sentences.shape[0])])
             # choose if we will use the joint loss or domain loss only
             loss_type = np.random.choice(
@@ -537,9 +496,9 @@ while (epoch < min_epoch or f1_increase > convergence_threshold) and (epoch < ma
         # set up the batch inputs
         batch_inputs = [batch_positions1, batch_positions2, batch_postags]
         if domain_adaptation:
-            batch_inputs.extend([batch_sentences_1, batch_sentences_2, batch_e1_1, batch_e1_2, batch_e2_1, batch_e2_2])
+            batch_inputs.extend([batch_sentences_1, batch_sentences_2])
         else:
-            batch_inputs.extend([batch_sentences_1, batch_e1_1, batch_e2_1])
+            batch_inputs.extend([batch_sentences_1])
         batch_inputs.append(lmbda)
         # and the batch labels
         if domain_adaptation:
@@ -569,10 +528,6 @@ while (epoch < min_epoch or f1_increase > convergence_threshold) and (epoch < ma
             pos_tags_dev,
             np.zeros(sentenceDev.shape), # not using source domain
             sentenceDev,                 # testing from target domain
-            np.zeros(e1Dev.shape),
-            e1Dev,
-            np.zeros(e2Dev.shape),
-            e2Dev,
             np.array([[0] for _ in range(sentenceDev.shape[0])])
         ]
     else:
@@ -581,8 +536,6 @@ while (epoch < min_epoch or f1_increase > convergence_threshold) and (epoch < ma
             positionDev2,
             pos_tags_dev,
             sentenceDev, 
-            e1Dev,
-            e2Dev,
             np.array([[0] for _ in range(sentenceDev.shape[0])])
         ]
 
@@ -621,10 +574,6 @@ if eval_on_test_at_end:
             pos_tags_test,
             np.zeros(sentenceTest.shape), # not using source domain
             sentenceTest,                 # testing from target domain
-            np.zeros(e1Test.shape),
-            e1Test,
-            np.zeros(e2Test.shape),
-            e2Test,
             np.array([[0] for _ in range(sentenceTest.shape[0])])
         ]
     else:
@@ -633,8 +582,6 @@ if eval_on_test_at_end:
             positionTest2,
             pos_tags_test,
             sentenceTest, 
-            e1Test,
-            e2Test,
             np.array([[0] for _ in range(sentenceTest.shape[0])])
         ]
 
