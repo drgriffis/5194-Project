@@ -352,7 +352,7 @@ model_outputs.append(c_models)
 ## Domain adversarial classifier
 
 if domain_adaptation:
-    domain_classifier = AddDomainAdversarialClassifier(mapped_words, use_pooling=True)
+    domain_classifier = AddDomainAdversarialClassifier(wordModel, use_pooling=True)
     model_outputs.append(domain_classifier)
 
 
