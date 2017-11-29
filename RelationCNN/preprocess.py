@@ -165,9 +165,10 @@ def getOrderedVocabulary(embeddingsPath1, embeddingsPath2, words):
 def loadFilteredEmbeddings(embeddingsPath, word2Idx):
     # check how many dimensions are in the embedding file
     with open(embeddingsPath) as f:
-        first_line = f.readline()
+        first_line = f.readline().rstrip()
         split = [s.strip() for s in first_line.split(" ")]
         ndim = len(split) - 1  # account for the word itself
+        print('Dim: %d' % ndim)
 
     embeddings = np.zeros([len(word2Idx), ndim])
     # add PADDING (this is unnecessary, since already zeros, but makes me feel better)
@@ -178,14 +179,20 @@ def loadFilteredEmbeddings(embeddingsPath, word2Idx):
     # read in the embeddings specified in the file
     words_seen = set()
     for line in open(embeddingsPath):
-        split = [s.strip() for s in line.split(" ")]
-        word = split[0].lower()
-        assert len(split) == ndim+1
+        line = line.rstrip()
+        try:
+            split = [s.strip() for s in line.split(" ")]
+            word = split[0].lower()
+            assert len(split) == ndim+1
 
-        if word in word2Idx:
-            vector = np.array([float(num) for num in split[1:]])
-            embeddings[word2Idx[word]] = vector
-            words_seen.add(word)
+            if word in word2Idx:
+                vector = np.array([float(num) for num in split[1:]])
+                embeddings[word2Idx[word]] = vector
+                words_seen.add(word)
+        except Exception as e:
+            print(word)
+            print(split)
+            raise e
 
     # copy UNKNOWN embedding for all unseen words
     for word in word2Idx:

@@ -203,8 +203,8 @@ def getOrderedVocabulary(embeddingsPath1, embeddingsPath2, words):
 def loadFilteredEmbeddings(embeddingsPath, word2Idx):
     # check how many dimensions are in the embedding file
     with open(embeddingsPath) as f:
-        first_line = f.readline()
-        split = [s.strip() for s in first_line.split()]
+        first_line = f.readline().rstrip()
+        split = [s.strip() for s in first_line.split(" ")]
         ndim = len(split) - 1  # account for the word itself
 
     embeddings = np.zeros([len(word2Idx), ndim])
@@ -216,7 +216,8 @@ def loadFilteredEmbeddings(embeddingsPath, word2Idx):
     # read in the embeddings specified in the file
     words_seen = set()
     for line in open(embeddingsPath):
-        split = [s.strip() for s in line.split()]
+        line = line.rstrip()
+        split = [s.strip() for s in line.split(" ")]
         word = split[0].lower()
         assert len(split) == ndim+1
 
