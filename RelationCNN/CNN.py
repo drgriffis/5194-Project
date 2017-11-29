@@ -274,7 +274,7 @@ print "Start training"
 
 
 
-max_prec, max_rec, max_acc, max_f1 = 0,0,0,0
+max_prec, max_rec, max_acc, max_f1_4c, max_f1_5c = 0,0,0,0,0
 
 def getPrecision(pred_test, yTest, targetLabel):
     #Precision for non-vague
@@ -306,22 +306,25 @@ def evaluation(model, inputs, labels):
    
     acc =  np.sum(predictions == labels) / float(len(labels))
 
-    f1Sum = 0
-    f1Count = 0
-    for targetLabel in xrange(1, max(labels)):        
-        prec = getPrecision(predictions, labels, targetLabel)
-        rec = getPrecision(labels, predictions, targetLabel)
-        f1 = 0 if (prec+rec) == 0 else 2*prec*rec/(prec+rec)
-        f1Sum += f1
-        f1Count +=1    
+    f1s = []
+    for start in [0,1]:
+        f1Sum = 0
+        f1Count = 0
+        for targetLabel in xrange(start, max(labels)):        
+            prec = getPrecision(predictions, labels, targetLabel)
+            rec = getPrecision(labels, predictions, targetLabel)
+            f1 = 0 if (prec+rec) == 0 else 2*prec*rec/(prec+rec)
+            f1Sum += f1
+            f1Count +=1    
         
-    macroF1 = f1Sum / float(f1Count)    
+        macroF1 = f1Sum / float(f1Count)    
+        f1s.append(macroF1)
 
-    return (acc, macroF1)
+    return (acc, f1s[0], f1s[1])
 
 # train until F1 converges (or starts decreasing) on dev set
 epoch = 0
-prev_f1, f1_increase = 0, float('inf')
+prev_f1_4c, f1_increase = 0, float('inf')
 while (epoch < min_epoch or f1_increase > convergence_threshold) and (epoch < max_epoch):
     
     sys.stdout.write('[TRAINING] Starting iteration %d...\n' % (epoch+1))
@@ -419,21 +422,23 @@ while (epoch < min_epoch or f1_increase > convergence_threshold) and (epoch < ma
             np.array([[0] for _ in range(sentenceDev.shape[0])])
         ]
 
-    acc, macroF1 = evaluation(model, inputs, yDev)
+    acc, macroF1_5c, macroF1_4c = evaluation(model, inputs, yDev)
 
     max_acc = max(max_acc, acc)
     print "Accuracy: %.4f (max: %.4f)" % (acc, max_acc)
 
-    max_f1 = max(max_f1, macroF1)
-    print "Non-other Macro-Averaged F1: %.4f (max: %.4f)\n" % (macroF1, max_f1)
+    max_f1_5c = max(max_f1_5c, macroF1_5c)
+    print "5-class Macro-Averaged F1: %.4f (max: %.4f)" % (macroF1_5c, max_f1_5c)
+    max_f1_4c = max(max_f1_4c, macroF1_4c)
+    print "Non-other Macro-Averaged F1: %.4f (max: %.4f)\n" % (macroF1_4c, max_f1_4c)
 
-    f1_increase = macroF1 - prev_f1
-    prev_f1 = macroF1
+    f1_increase = macroF1_4c - prev_f1_4c
+    prev_f1_4c= macroF1_4c
 
     epoch += 1
 
     # save the best-performing model (ON DEV)
-    if macroF1 == max_f1 and eval_on_test_at_end:
+    if macroF1_4c == max_f1_4c and eval_on_test_at_end:
         print '   >> SAVING MODEL WEIGHTS'
         model.save_weights(modelf)
         best_iter = epoch
@@ -463,6 +468,7 @@ if eval_on_test_at_end:
             np.array([[0] for _ in range(sentenceTest.shape[0])])
         ]
 
-    acc, macroF1 = evaluation(model, inputs, yTest)
+    acc, macroF1_5c, macroF1_4c = evaluation(model, inputs, yTest)
     print "Test set accuracy: %.4f" % acc
-    print "Non-other Macro-Averaged F1: %.4f\n" % macroF1
+    print "5-class Macro-Averaged F1: %.4f" % macroF1_5c
+    print "Non-other Macro-Averaged F1: %.4f\n" % macroF1_4c
