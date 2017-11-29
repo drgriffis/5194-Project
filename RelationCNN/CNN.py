@@ -116,15 +116,18 @@ def _cli():
     parser.add_option('--test', dest='test',
         action='store_true', default=eval_on_test_at_end,
         help='Enable evaluation on test set at end of training')
+    parser.add_option('--attn-data', dest='attn_data',
+        action='store_true', default=False,
+        help='Using data formatted for attention model')
     (options, args) = parser.parse_args()
 
     if options.lmbda != base_lambda:
         print '[CLI OVERRIDE] lambda = %.4f' % options.lmbda
     if options.eta != eta:
         print '[CLI OVERRIDE] eta = %.4f' % options.eta
-    return options.datadir, options.lmbda, options.eta, options.noadapt, options.test
+    return options.datadir, options.lmbda, options.eta, options.noadapt, options.test, options.attn_data
 
-pkl_dir, base_lambda, eta, noadapt, eval_on_test_at_end = _cli()
+pkl_dir, base_lambda, eta, noadapt, eval_on_test_at_end, using_attn_data = _cli()
 domain_adaptation = not noadapt
 
 modelf = '%s/best_hp_model.h5' % pkl_dir
@@ -133,21 +136,36 @@ best_iter = 0
 print "Loading dataset from %s" % pkl_dir
 f = gzip.open('%s/sem-relations.pkl.gz' % pkl_dir, 'rb')
 first_array = pkl.load(f)
+if using_attn_data:
+    if type(first_array) is tuple or first_array.shape != (1,):
+        yTrain, sentenceTrain, pos_tags_train, positionTrain1, positionTrain2, e1Train, e2Train = first_array
+        nfiles = 3
+        print ' >> Assuming train/dev/test'
+    else:
+        nfiles = first_array[0]
+        if nfiles == 2: print ' >> Using train/dev'
+        elif nfiles == 3: print ' >> Using train/dev/test'
+        yTrain, sentenceTrain, pos_tags_train, positionTrain1, positionTrain2, e1Train, e2Train = pkl.load(f)
 
-if type(first_array) is tuple or first_array.shape != (1,):
-    yTrain, sentenceTrain, positionTrain1, positionTrain2 = first_array
-    nfiles = 3
-    print ' >> Assuming train/dev/test'
+    yDev, sentenceDev, pos_tags_dev, positionDev1, positionDev2, e1Dev, e2Dev = pkl.load(f)
+
+    if nfiles > 2:
+        yTest, sentenceTest, pos_tags_test, positionTest1, positionTest2, e1Test, e2Test  = pkl.load(f)
 else:
-    nfiles = first_array[0]
-    if nfiles == 2: print ' >> Using train/dev'
-    elif nfiles == 3: print ' >> Using train/dev/test'
-    yTrain, sentenceTrain, positionTrain1, positionTrain2 = pkl.load(f)
+    if type(first_array) is tuple or first_array.shape != (1,):
+        yTrain, sentenceTrain, positionTrain1, positionTrain2 = first_array
+        nfiles = 3
+        print ' >> Assuming train/dev/test'
+    else:
+        nfiles = first_array[0]
+        if nfiles == 2: print ' >> Using train/dev'
+        elif nfiles == 3: print ' >> Using train/dev/test'
+        yTrain, sentenceTrain, positionTrain1, positionTrain2 = pkl.load(f)
 
-yDev, sentenceDev, positionDev1, positionDev2 = pkl.load(f)
+    yDev, sentenceDev, positionDev1, positionDev2 = pkl.load(f)
 
-if nfiles > 2:
-    yTest, sentenceTest, positionTest1, positionTest2  = pkl.load(f)
+    if nfiles > 2:
+        yTest, sentenceTest, positionTest1, positionTest2  = pkl.load(f)
 f.close()
 
 max_position = max(np.max(positionTrain1), np.max(positionTrain2))+1
